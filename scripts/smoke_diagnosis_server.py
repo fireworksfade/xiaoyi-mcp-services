@@ -32,11 +32,12 @@ def direct_http_client(
     )
 
 
-async def run(url: str) -> None:
+async def run(url: str, timeout: float) -> None:
     server = MCPServerStreamableHttp(
         name="iot-diagnosis-smoke",
-        params={"url": url, "timeout": 15, "httpx_client_factory": direct_http_client},
+        params={"url": url, "timeout": timeout, "httpx_client_factory": direct_http_client},
         use_structured_content=True,
+        client_session_timeout_seconds=timeout + 5,
     )
     async with server:
         tools = await server.list_tools()
@@ -119,8 +120,9 @@ async def run(url: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:9001/mcp")
+    parser.add_argument("--timeout", type=float, default=90)
     args = parser.parse_args()
-    asyncio.run(run(args.url))
+    asyncio.run(run(args.url, args.timeout))
 
 
 if __name__ == "__main__":

@@ -25,3 +25,9 @@ python -m iot_diagnosis.simulator --device-id ESP32_05 --scenario mqtt_timeout
 ```powershell
 ..\backend\.venv\Scripts\python.exe scripts\smoke_diagnosis_server.py
 ```
+
+使用响应较慢的外部模型时，可提高单次 MCP 工具调用的客户端超时：
+
+```powershell
+..\backend\.venv\Scripts\python.exe scripts\smoke_diagnosis_server.py --timeout 180
+```
