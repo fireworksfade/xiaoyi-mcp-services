@@ -286,6 +286,29 @@ def ingest_knowledge_text(
 @mcp.tool(
     annotations=ToolAnnotations(
         readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
+def delete_knowledge_document(
+    source: str,
+    document_id: Annotated[str, Field(min_length=1, max_length=120)],
+) -> dict[str, Any]:
+    """从 SQLite、MySQL 镜像和 Qdrant 向量索引中删除整个知识文档。"""
+    try:
+        return success(
+            repository.delete_knowledge_document(source=source, document_id=document_id)
+        )
+    except ValueError as exc:
+        return failure(str(exc), "知识文档参数无效")
+    except Exception:
+        return failure("DATABASE_ERROR", "知识文档删除失败", retryable=True)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
         destructiveHint=False,
         idempotentHint=True,
         openWorldHint=False,

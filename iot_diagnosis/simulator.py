@@ -30,6 +30,21 @@ def main() -> None:
         callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
         client_id=f"simulator-{args.device_id}",
     )
+    # 遗嘱消息：模拟进程崩溃（而非正常退出）时，Broker 代发离线状态，
+    # 诊断服务无需等心跳超时即可感知设备掉线。
+    client.will_set(
+        f"iot/{args.device_id}/status",
+        json.dumps(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "online": False,
+                "offline_reason": "client_lost",
+            },
+            ensure_ascii=False,
+        ),
+        qos=1,
+        retain=True,
+    )
     client.connect(args.host, args.port, keepalive=60)
     client.loop_start()
     uptime = 86400

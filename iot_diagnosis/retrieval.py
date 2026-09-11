@@ -11,6 +11,9 @@ def similarity(query: str, content: str) -> float:
     return lexical_similarity(query, content)
 
 
+RERANK_CANDIDATE_LIMIT = 60
+
+
 def rewrite_query(
     query: str,
     state: dict[str, Any] | None,
@@ -39,7 +42,17 @@ def search_knowledge(
     state: dict[str, Any] | None = None,
     logs: list[str] | None = None,
 ) -> dict[str, Any]:
-    selected = validate_sources(sources or route_query(query, state, logs).sources)
+    selected = validate_sources(
+        sources
+        or route_query(
+            query,
+            state,
+            logs,
+            embedding_provider=getattr(
+                getattr(repository.external, "qdrant", None), "embedding_provider", None
+            ),
+        ).sources
+    )
     rewritten = rewrite_query(query, state, logs)
     candidates: list[dict[str, Any]] = []
 
@@ -111,12 +124,20 @@ def search_knowledge(
         if not current or item["retrieval_score"] > current["retrieval_score"]:
             deduplicated[key] = item
 
+    # 知识库增大后候选可能远超重排服务的批量上限；先按初筛分截取头部，
+    # 避免整包超限触发 422 而静默降级为加权排序。
+    rerank_pool = sorted(
+        deduplicated.values(),
+        key=lambda item: float(item["retrieval_score"]),
+        reverse=True,
+    )[:RERANK_CANDIDATE_LIMIT]
+
     fault_type = infer_fault_type(" ".join([query, *(logs or [])]))
     expected_source = f"{fault_type}_docs"
     reranker = reranker_from_env()
     reranked = reranker.rerank(
         rewritten,
-        list(deduplicated.values()),
+        rerank_pool,
         expected_source=expected_source,
         top_k=top_k,
     )

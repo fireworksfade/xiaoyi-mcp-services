@@ -83,7 +83,8 @@ class DiagnosisRepository:
                     payload_json=excluded.payload_json,
                     last_error=excluded.last_error,
                     updated_at=excluded.updated_at,
-                    completed_at=NULL""",
+                    completed_at=NULL,
+                    claimed_at=NULL""",
                 (
                     str(uuid.uuid4()),
                     dedupe_key,
@@ -109,15 +110,24 @@ class DiagnosisRepository:
             self._enqueue_external_sync(component, operation, payload)
         return delivered
 
-    def retry_external_sync(self, limit: int = 100) -> dict[str, int]:
+    def retry_external_sync(self, limit: int = 100, lease_seconds: int = 300) -> dict[str, int]:
+        # 单条 UPDATE 原子认领（带租约）：多个进程/线程同时重试时不会重复
+        # 派发同一批待同步记录；崩溃进程的租约过期后可被其他进程接管。
+        now = iso()
+        lease_deadline = iso(utc_now() - timedelta(seconds=lease_seconds))
         with self._lock, self._connect() as db:
             rows = db.execute(
-                """SELECT id, component, operation, payload_json
-                FROM external_sync_outbox
-                WHERE completed_at IS NULL
-                ORDER BY created_at, id
-                LIMIT ?""",
-                (max(1, min(limit, 1000)),),
+                """UPDATE external_sync_outbox
+                SET claimed_at=?, attempts=attempts+1, updated_at=?
+                WHERE id IN (
+                    SELECT id FROM external_sync_outbox
+                    WHERE completed_at IS NULL
+                      AND (claimed_at IS NULL OR claimed_at < ?)
+                    ORDER BY created_at, id
+                    LIMIT ?
+                )
+                RETURNING id, component, operation, payload_json""",
+                (now, now, lease_deadline, max(1, min(limit, 1000))),
             ).fetchall()
 
         delivered = 0
@@ -125,25 +135,25 @@ class DiagnosisRepository:
         for row in rows:
             payload = json.loads(row["payload_json"])
             success = self._dispatch_external(row["component"], row["operation"], payload)
-            now = iso()
+            finished = iso()
             with self._lock, self._connect() as db:
                 if success:
                     delivered += 1
                     db.execute(
                         """UPDATE external_sync_outbox
-                        SET attempts=attempts+1, last_error=NULL, updated_at=?, completed_at=?
+                        SET last_error=NULL, updated_at=?, completed_at=?, claimed_at=NULL
                         WHERE id=?""",
-                        (now, now, row["id"]),
+                        (finished, finished, row["id"]),
                     )
                 else:
                     failed += 1
                     db.execute(
                         """UPDATE external_sync_outbox
-                        SET attempts=attempts+1, last_error=?, updated_at=?
+                        SET last_error=?, updated_at=?, claimed_at=NULL
                         WHERE id=?""",
                         (
                             self.external.errors.get(row["component"], "UNAVAILABLE"),
-                            now,
+                            finished,
                             row["id"],
                         ),
                     )
@@ -400,7 +410,8 @@ class DiagnosisRepository:
                     last_error TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
-                    completed_at TEXT
+                    completed_at TEXT,
+                    claimed_at TEXT
                 );
                 CREATE INDEX IF NOT EXISTS ix_external_sync_pending
                     ON external_sync_outbox(completed_at, created_at);
@@ -428,6 +439,11 @@ class DiagnosisRepository:
             }.items():
                 if name not in knowledge_columns:
                     db.execute(f"ALTER TABLE knowledge_document ADD COLUMN {name} {definition}")
+            outbox_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(external_sync_outbox)").fetchall()
+            }
+            if "claimed_at" not in outbox_columns:
+                db.execute("ALTER TABLE external_sync_outbox ADD COLUMN claimed_at TEXT")
             db.execute(
                 """UPDATE knowledge_document
                 SET document_id = CASE
@@ -841,6 +857,41 @@ class DiagnosisRepository:
             "chunk_ids": [item["source_id"] for item in items],
             "mysql_saved": mysql_saved,
             "vector_indexed": vector_indexed,
+            "sync_status": sync_status,
+        }
+
+    def delete_knowledge_document(
+        self,
+        *,
+        source: str,
+        document_id: str,
+    ) -> dict[str, Any]:
+        allowed_sources = {"mqtt_docs", "wifi_docs", "sensor_docs", "device_docs"}
+        if source not in allowed_sources:
+            raise ValueError("INVALID_DOCUMENT_SOURCE")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,119}", document_id):
+            raise ValueError("DOCUMENT_ID_INVALID")
+        with self._lock, self._connect() as db:
+            cursor = db.execute(
+                """DELETE FROM knowledge_document
+                WHERE source = ? AND (
+                    document_id = ? OR source_id = ? OR source_id LIKE ?
+                )""",
+                (source, document_id, document_id, f"{document_id}#%"),
+            )
+            deleted = cursor.rowcount
+        delete_payload = {"source": source, "document_id": document_id}
+        mysql_saved = self._external_write("mysql", "delete_document", delete_payload)
+        vector_deleted = self._external_write("qdrant", "delete_document", delete_payload)
+        sync_status = "complete" if mysql_saved and vector_deleted else (
+            "pending" if self.external_sync_status()["pending"] else "local_only"
+        )
+        return {
+            "source": source,
+            "document_id": document_id,
+            "deleted_chunks": max(deleted, 0),
+            "mysql_saved": mysql_saved,
+            "vector_deleted": vector_deleted,
             "sync_status": sync_status,
         }
 

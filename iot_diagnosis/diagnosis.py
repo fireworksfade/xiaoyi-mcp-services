@@ -189,6 +189,9 @@ def diagnose(
         state if use_realtime_state else None,
         logs,
         llm_client,
+        embedding_provider=getattr(
+            getattr(repository.external, "qdrant", None), "embedding_provider", None
+        ),
     )
 
     retrieval_started = time.perf_counter()

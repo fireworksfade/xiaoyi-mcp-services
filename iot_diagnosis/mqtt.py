@@ -15,10 +15,13 @@ logger = logging.getLogger("xiaoyi.iot_diagnosis.mqtt")
 class MQTTIngestor:
     def __init__(self, repository: DiagnosisRepository):
         self.repository = repository
+        # 持久会话 + QoS1 订阅：MCP 短暂重启期间 Broker 会保留并补发消息，
+        # 不再依赖进程常驻才不漏数据。
         self.client = mqtt.Client(
             callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
             client_id="iot-diagnosis-mcp",
             protocol=mqtt.MQTTv311,
+            clean_session=False,
         )
         username = os.getenv("MQTT_USERNAME")
         if username:
@@ -39,7 +42,7 @@ class MQTTIngestor:
             "iot/+/fault",
             "iot/+/heartbeat",
         ):
-            client.subscribe(topic)
+            client.subscribe(topic, qos=1)
         logger.info("Subscribed to IoT diagnosis topics")
 
     def _on_message(self, _client, _userdata, message) -> None:

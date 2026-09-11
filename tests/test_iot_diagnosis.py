@@ -103,6 +103,7 @@ async def test_core_tools_are_discoverable_and_callable(tmp_path, monkeypatch) -
             "search_knowledge",
             "search_fault_cases",
             "add_verified_fault_case",
+            "delete_knowledge_document",
             "rebuild_vector_index",
         }
 
@@ -237,7 +238,7 @@ async def test_router_retrieval_diagnosis_and_traceability(tmp_path, monkeypatch
         )
         item = diagnosis.structured_content["data"]
         assert item["fault_type"] == "mqtt_connection"
-        assert item["route"]["router"] == "heuristic_fallback"
+        assert item["route"]["router"] in {"semantic", "heuristic_fallback"}
         assert {source["source_type"] for source in item["sources"]} >= {
             "fault_cases",
             "mqtt_docs",
@@ -249,7 +250,7 @@ async def test_router_retrieval_diagnosis_and_traceability(tmp_path, monkeypatch
             {"diagnosis_id": item["diagnosis_id"]},
         )
         trace_data = trace.structured_content["data"]
-        assert trace_data["route"]["router"] == "heuristic_fallback"
+        assert trace_data["route"]["router"] in {"semantic", "heuristic_fallback"}
         assert {context["source"] for context in trace_data["contexts"]} >= {
             "fault_cases",
             "mqtt_docs",
@@ -609,11 +610,12 @@ async def test_configured_llm_drives_router_and_diagnosis(tmp_path, monkeypatch)
             {"device_id": "ESP32_05", "query": "MQTT 为什么反复超时？"},
         )
     item = result.structured_content["data"]
-    assert item["route"]["router"] == "llm"
+    # 语义路由优先于 LLM Router；LLM Router 只在向量路由不可用时兜底
+    assert item["route"]["router"] == "semantic"
     assert item["fault_name"] == "LLM 诊断的 MQTT 超时"
-    assert item["observability"]["llm_latency_ms"] == 37.5
-    assert item["observability"]["input_tokens"] == 240
-    assert item["observability"]["output_tokens"] == 80
+    assert item["observability"]["llm_latency_ms"] == 25.0
+    assert item["observability"]["input_tokens"] == 160
+    assert item["observability"]["output_tokens"] == 60
 
 
 def test_external_write_outbox_recovers_without_false_index_success(tmp_path) -> None:
@@ -893,3 +895,24 @@ async def test_readiness_reports_retrieval_model_outage(tmp_path, monkeypatch) -
     assert response.status_code == 503
     assert payload["retrieval_models"]["status"] == "unavailable"
     assert "retrieval_models" in payload["issues"]
+
+
+async def test_tool_schemas_keep_optional_params_optional() -> None:
+    """契约回归：strict 化把可选参数强转为必填会让第三方模型传出
+    字符串 "None" 并触发 MCP 入参校验失败，因此任何带默认值或可空
+    的参数都不得出现在 required 中。"""
+    async with Client(server.mcp) as client:
+        tools = (await client.list_tools()).tools
+    assert tools, "no tools discovered"
+    for tool in tools:
+        schema = tool.input_schema or {}
+        properties = schema.get("properties") or {}
+        for name in schema.get("required") or []:
+            parameter = properties.get(name) or {}
+            any_of = parameter.get("anyOf")
+            nullable = any(item.get("type") == "null" for item in any_of or [])
+            type_value = parameter.get("type")
+            type_nullable = isinstance(type_value, list) and "null" in type_value
+            assert not (nullable or type_nullable), (
+                f"{tool.name}.{name} 是可空参数却出现在 required 中"
+            )

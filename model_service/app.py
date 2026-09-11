@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import Any
@@ -35,11 +36,72 @@ class EmbeddingRequest(BaseModel):
 
 class RerankRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
-    documents: list[str] = Field(min_length=1, max_length=100)
+    documents: list[str] = Field(min_length=1, max_length=200)
     top_n: int = Field(default=5, ge=1, le=100)
 
 
 models: dict[str, Any] = {}
+
+# 并发 embedding 请求的 micro-batching：短窗口内到达的请求合并为一次
+# GPU encode，避免并发单条请求各自触发一次前向。
+EMBED_COALESCE_WINDOW_SECONDS = 0.005
+EMBED_MAX_BATCH_TEXTS = 64
+
+
+class _EmbedJob:
+    def __init__(self, texts: list[str], dimensions: int | None):
+        self.texts = texts
+        self.dimensions = dimensions
+        self.future: asyncio.Future[np.ndarray] = asyncio.get_running_loop().create_future()
+
+
+_embed_queue: asyncio.Queue[_EmbedJob] | None = None
+_embed_worker_task: asyncio.Task | None = None
+
+
+def _encode_sync(texts: list[str]) -> np.ndarray:
+    return models["embedding"].encode(
+        texts,
+        batch_size=EMBEDDING_BATCH_SIZE,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
+
+
+def _truncate_dimensions(vectors: np.ndarray, dimensions: int) -> np.ndarray:
+    if dimensions >= vectors.shape[1]:
+        return vectors
+    truncated = vectors[:, :dimensions]
+    norms = np.linalg.norm(truncated, axis=1, keepdims=True)
+    return truncated / np.maximum(norms, 1e-12)
+
+
+async def _embedding_worker() -> None:
+    assert _embed_queue is not None
+    loop = asyncio.get_running_loop()
+    while True:
+        job = await _embed_queue.get()
+        batch = [job]
+        batch_texts = len(job.texts)
+        deadline = loop.time() + EMBED_COALESCE_WINDOW_SECONDS
+        while batch_texts < EMBED_MAX_BATCH_TEXTS and not _embed_queue.empty():
+            if loop.time() >= deadline:
+                break
+            batch.append(_embed_queue.get_nowait())
+            batch_texts += len(batch[-1].texts)
+        try:
+            all_texts = [text for item in batch for text in item.texts]
+            vectors = await loop.run_in_executor(None, _encode_sync, all_texts)
+            offset = 0
+            for item in batch:
+                count = len(item.texts)
+                item.future.set_result(vectors[offset : offset + count])
+                offset += count
+        except Exception as exc:
+            for item in batch:
+                if not item.future.done():
+                    item.future.set_exception(exc)
 
 
 @asynccontextmanager
@@ -76,7 +138,14 @@ async def lifespan(_: FastAPI):
     models["reranker_false_id"] = reranker_tokenizer.convert_tokens_to_ids("no")
     models["reranker_true_id"] = reranker_tokenizer.convert_tokens_to_ids("yes")
     models["device"] = device
+    global _embed_queue, _embed_worker_task
+    _embed_queue = asyncio.Queue()
+    _embed_worker_task = asyncio.create_task(_embedding_worker())
     yield
+    if _embed_worker_task is not None:
+        _embed_worker_task.cancel()
+        _embed_worker_task = None
+    _embed_queue = None
     models.clear()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -98,20 +167,14 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/v1/embeddings")
-def embeddings(request: EmbeddingRequest) -> dict[str, Any]:
+async def embeddings(request: EmbeddingRequest) -> dict[str, Any]:
     texts = [request.input] if isinstance(request.input, str) else request.input
-    vectors = models["embedding"].encode(
-        texts,
-        batch_size=EMBEDDING_BATCH_SIZE,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-    )
+    assert _embed_queue is not None
+    job = _EmbedJob(texts, request.dimensions)
+    _embed_queue.put_nowait(job)
+    vectors = await job.future
     dimensions = request.dimensions or int(vectors.shape[1])
-    if dimensions < vectors.shape[1]:
-        vectors = vectors[:, :dimensions]
-        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-        vectors = vectors / np.maximum(norms, 1e-12)
+    vectors = _truncate_dimensions(vectors, dimensions)
     return {
         "object": "list",
         "model": request.model or EMBEDDING_MODEL,
