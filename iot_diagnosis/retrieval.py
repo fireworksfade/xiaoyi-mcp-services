@@ -1,31 +1,14 @@
 from __future__ import annotations
 
-import math
-import re
-from collections import Counter
 from typing import Any
 
 from iot_diagnosis.repository import DiagnosisRepository
+from iot_diagnosis.reranker import lexical_similarity, reranker_from_env
 from iot_diagnosis.router import infer_fault_type, route_query, validate_sources
 
 
-def _tokens(text: str) -> list[str]:
-    lowered = text.lower()
-    words = re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", lowered)
-    compact = re.sub(r"\s+", "", lowered)
-    trigrams = [compact[index : index + 3] for index in range(max(0, len(compact) - 2))]
-    return words + trigrams
-
-
 def similarity(query: str, content: str) -> float:
-    left = Counter(_tokens(query))
-    right = Counter(_tokens(content))
-    if not left or not right:
-        return 0.0
-    dot = sum(value * right.get(token, 0) for token, value in left.items())
-    norm_left = math.sqrt(sum(value * value for value in left.values()))
-    norm_right = math.sqrt(sum(value * value for value in right.values()))
-    return dot / (norm_left * norm_right) if norm_left and norm_right else 0.0
+    return lexical_similarity(query, content)
 
 
 def rewrite_query(
@@ -130,19 +113,28 @@ def search_knowledge(
 
     fault_type = infer_fault_type(" ".join([query, *(logs or [])]))
     expected_source = f"{fault_type}_docs"
-    reranked = []
-    for item in deduplicated.values():
-        source_bonus = 0.08 if item["source"] in {"fault_cases", expected_source} else 0.0
-        item = {**item, "score": round(min(1.0, item["retrieval_score"] + source_bonus), 4)}
-        item.pop("retrieval_score")
-        reranked.append(item)
-    reranked.sort(key=lambda item: item["score"], reverse=True)
+    reranker = reranker_from_env()
+    reranked = reranker.rerank(
+        rewritten,
+        list(deduplicated.values()),
+        expected_source=expected_source,
+        top_k=top_k,
+    )
     return {
         "query": query,
         "rewritten_query": rewritten,
         "selected_sources": selected,
         "candidate_count": len(candidates),
-        "results": reranked[:top_k],
+        "embedding_provider": getattr(
+            getattr(getattr(repository.external, "qdrant", None), "embedding_provider", None),
+            "name",
+            "local_lexical",
+        ),
+        "reranker": {
+            "provider": getattr(reranker, "name", type(reranker).__name__),
+            "fallback": bool(getattr(reranker, "used_fallback", False)),
+        },
+        "results": reranked,
     }
 
 

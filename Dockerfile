@@ -8,6 +8,9 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY common ./common
 COPY iot_diagnosis ./iot_diagnosis
+COPY knowledge ./knowledge
+COPY evals ./evals
+COPY scripts ./scripts
 
 RUN pip install --no-cache-dir . \
     && addgroup --system xiaoyi \

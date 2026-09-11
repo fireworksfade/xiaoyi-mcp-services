@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
+import os
+import re
 import sqlite3
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -31,9 +35,11 @@ class DiagnosisRepository:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
         self.external = ExternalStores()
+        self.retry_external_sync()
         self._sync_external_snapshot()
 
     def _external_call(self, component: str, method: str, *args) -> bool:
+        self.external.ensure_connected(component)
         target = getattr(self.external, component, None)
         if not target:
             return False
@@ -45,6 +51,118 @@ class DiagnosisRepository:
             self.external.errors[component] = type(exc).__name__
             logger.exception("External %s operation %s failed", component, method)
             return False
+
+    def _dispatch_external(self, component: str, operation: str, payload: dict[str, Any]) -> bool:
+        if operation == "upsert_device_status":
+            return self._external_call(
+                component,
+                operation,
+                payload["device"],
+                payload["status"],
+            )
+        return self._external_call(component, operation, payload)
+
+    def _enqueue_external_sync(
+        self,
+        component: str,
+        operation: str,
+        payload: dict[str, Any],
+    ) -> None:
+        payload_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        dedupe_key = hashlib.sha256(
+            f"{component}:{operation}:{payload_json}".encode("utf-8")
+        ).hexdigest()
+        now = iso()
+        with self._lock, self._connect() as db:
+            db.execute(
+                """INSERT INTO external_sync_outbox
+                (id, dedupe_key, component, operation, payload_json, attempts,
+                 last_error, created_at, updated_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, NULL)
+                ON CONFLICT(dedupe_key) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    last_error=excluded.last_error,
+                    updated_at=excluded.updated_at,
+                    completed_at=NULL""",
+                (
+                    str(uuid.uuid4()),
+                    dedupe_key,
+                    component,
+                    operation,
+                    payload_json,
+                    self.external.errors.get(component, "UNAVAILABLE"),
+                    now,
+                    now,
+                ),
+            )
+
+    def _external_write(
+        self,
+        component: str,
+        operation: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        if not self.external.is_configured(component):
+            return False
+        delivered = self._dispatch_external(component, operation, payload)
+        if not delivered:
+            self._enqueue_external_sync(component, operation, payload)
+        return delivered
+
+    def retry_external_sync(self, limit: int = 100) -> dict[str, int]:
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                """SELECT id, component, operation, payload_json
+                FROM external_sync_outbox
+                WHERE completed_at IS NULL
+                ORDER BY created_at, id
+                LIMIT ?""",
+                (max(1, min(limit, 1000)),),
+            ).fetchall()
+
+        delivered = 0
+        failed = 0
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            success = self._dispatch_external(row["component"], row["operation"], payload)
+            now = iso()
+            with self._lock, self._connect() as db:
+                if success:
+                    delivered += 1
+                    db.execute(
+                        """UPDATE external_sync_outbox
+                        SET attempts=attempts+1, last_error=NULL, updated_at=?, completed_at=?
+                        WHERE id=?""",
+                        (now, now, row["id"]),
+                    )
+                else:
+                    failed += 1
+                    db.execute(
+                        """UPDATE external_sync_outbox
+                        SET attempts=attempts+1, last_error=?, updated_at=?
+                        WHERE id=?""",
+                        (
+                            self.external.errors.get(row["component"], "UNAVAILABLE"),
+                            now,
+                            row["id"],
+                        ),
+                    )
+        return {"processed": len(rows), "delivered": delivered, "failed": failed}
+
+    def external_sync_status(self) -> dict[str, Any]:
+        with self._connect() as db:
+            pending = db.execute(
+                """SELECT component, COUNT(*) AS count, MAX(attempts) AS max_attempts
+                FROM external_sync_outbox
+                WHERE completed_at IS NULL
+                GROUP BY component"""
+            ).fetchall()
+        by_component = {row["component"]: row["count"] for row in pending}
+        return {
+            "pending": sum(by_component.values()),
+            "by_component": by_component,
+            "max_attempts": max((row["max_attempts"] for row in pending), default=0),
+        }
 
     @staticmethod
     def _case_document(item: dict[str, Any]) -> dict[str, Any]:
@@ -65,31 +183,123 @@ class DiagnosisRepository:
             "device_type": item["device_type"],
         }
 
+    @staticmethod
+    def _knowledge_vector_document(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "source": item["source"],
+            "id": item["source_id"],
+            "document_id": item.get("document_id")
+            or item["source_id"].split("#", 1)[0],
+            "chunk_index": int(item.get("chunk_index") or 0),
+            "title": item["title"],
+            "content": item["content"],
+            "device_type": item.get("device_type"),
+        }
+
+    def _qdrant_write_many(self, items: list[dict[str, Any]]) -> int:
+        if not items or not self.external.is_configured("qdrant"):
+            return 0
+        batch_size = max(
+            1, min(int(os.getenv("DIAGNOSIS_VECTOR_BATCH_SIZE", "32")), 100)
+        )
+        indexed = 0
+        for offset in range(0, len(items), batch_size):
+            batch = items[offset : offset + batch_size]
+            if self._external_call("qdrant", "upsert_many", batch):
+                indexed += len(batch)
+                continue
+            for item in batch:
+                self._enqueue_external_sync("qdrant", "upsert", item)
+        return indexed
+
     def _sync_external_snapshot(self) -> None:
         with self._connect() as db:
             devices = {row["device_id"]: dict(row) for row in db.execute("SELECT * FROM device")}
             statuses = [dict(row) for row in db.execute("SELECT * FROM device_status")]
             logs = [dict(row) for row in db.execute("SELECT * FROM device_log")]
             documents = [dict(row) for row in db.execute("SELECT * FROM knowledge_document")]
+            diagnosis_rows = [dict(row) for row in db.execute("SELECT * FROM diagnosis_record")]
         cases = self.fault_cases()
-        self._external_call("mysql", "upsert_device_statuses", list(devices.values()), statuses)
-        self._external_call("mysql", "add_logs", logs)
+        if self.external.is_configured("mysql"):
+            if not self._external_call(
+                "mysql", "upsert_device_statuses", list(devices.values()), statuses
+            ):
+                for status in statuses:
+                    device = devices.get(status["device_id"])
+                    if device:
+                        self._enqueue_external_sync(
+                            "mysql",
+                            "upsert_device_status",
+                            {"device": device, "status": status},
+                        )
+            if not self._external_call("mysql", "add_logs", logs):
+                for item in logs:
+                    self._enqueue_external_sync("mysql", "add_log", item)
+        vector_documents = []
         for item in documents:
-            self._external_call("mysql", "upsert_document", item)
-            self._external_call(
-                "qdrant",
-                "upsert",
-                {
-                    "source": item["source"],
-                    "id": item["source_id"],
-                    "title": item["title"],
-                    "content": item["content"],
-                    "device_type": item.get("device_type"),
-                },
-            )
+            self._external_write("mysql", "upsert_document", item)
+            vector_documents.append(self._knowledge_vector_document(item))
         for item in cases:
-            self._external_call("mysql", "upsert_fault_case", item)
-            self._external_call("qdrant", "upsert", self._case_document(item))
+            self._external_write("mysql", "upsert_fault_case", item)
+            vector_documents.append(self._case_document(item))
+        self._qdrant_write_many(vector_documents)
+        diagnoses = [self._diagnosis_record_from_row(item) for item in diagnosis_rows]
+        if diagnoses and self.external.is_configured("mysql"):
+            if not self._external_call("mysql", "upsert_diagnoses", diagnoses):
+                for item in diagnoses:
+                    self._enqueue_external_sync("mysql", "upsert_diagnosis", item)
+
+    @staticmethod
+    def _diagnosis_record_from_row(item: dict[str, Any]) -> dict[str, Any]:
+        contexts = json.loads(item["retrieved_documents_json"])
+        record = {
+            "diagnosis_id": item["diagnosis_id"],
+            "request_id": item["request_id"],
+            "device_id": item["device_id"],
+            "query": item["query"],
+            "fault_type": item["fault_type"],
+            "fault_name": item["fault_name"],
+            "cause": item["cause"],
+            "solutions": json.loads(item["solutions_json"]),
+            "confidence": item["confidence"],
+            "route": {
+                "router": item["router_type"],
+                "selected_sources": json.loads(item["selected_sources_json"]),
+            },
+            "sources": contexts,
+            "trace_contexts": contexts,
+            "observability": {
+                "retrieval_count": item["retrieval_count"],
+                "rerank_count": item["rerank_count"],
+                "retrieval_latency_ms": item["retrieval_latency_ms"],
+                "llm_latency_ms": item["llm_latency_ms"],
+                "total_latency_ms": item["total_latency_ms"],
+                "input_tokens": item["input_tokens"],
+                "output_tokens": item["output_tokens"],
+                "error": item["error"],
+            },
+            "created_at": item["created_at"],
+        }
+        result_json = item.get("result_json")
+        if result_json:
+            record["result"] = json.loads(result_json)
+        else:
+            record["result"] = {
+                key: record[key]
+                for key in (
+                    "diagnosis_id",
+                    "device_id",
+                    "fault_type",
+                    "fault_name",
+                    "cause",
+                    "solutions",
+                    "confidence",
+                    "route",
+                    "sources",
+                    "observability",
+                )
+            }
+        return record
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
@@ -169,6 +379,7 @@ class DiagnosisRepository:
                     router_type TEXT NOT NULL,
                     selected_sources_json TEXT NOT NULL,
                     retrieved_documents_json TEXT NOT NULL,
+                    result_json TEXT,
                     retrieval_count INTEGER NOT NULL,
                     rerank_count INTEGER NOT NULL,
                     retrieval_latency_ms REAL NOT NULL DEFAULT 0,
@@ -179,6 +390,20 @@ class DiagnosisRepository:
                     error TEXT,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS external_sync_outbox (
+                    id TEXT PRIMARY KEY,
+                    dedupe_key TEXT NOT NULL UNIQUE,
+                    component TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS ix_external_sync_pending
+                    ON external_sync_outbox(completed_at, created_at);
                 """
             )
             diagnosis_columns = {
@@ -190,9 +415,28 @@ class DiagnosisRepository:
                 "input_tokens": "INTEGER NOT NULL DEFAULT 0",
                 "output_tokens": "INTEGER NOT NULL DEFAULT 0",
                 "error": "TEXT",
+                "result_json": "TEXT",
             }.items():
                 if name not in diagnosis_columns:
                     db.execute(f"ALTER TABLE diagnosis_record ADD COLUMN {name} {definition}")
+            knowledge_columns = {
+                row[1] for row in db.execute("PRAGMA table_info(knowledge_document)").fetchall()
+            }
+            for name, definition in {
+                "document_id": "TEXT",
+                "chunk_index": "INTEGER NOT NULL DEFAULT 0",
+            }.items():
+                if name not in knowledge_columns:
+                    db.execute(f"ALTER TABLE knowledge_document ADD COLUMN {name} {definition}")
+            db.execute(
+                """UPDATE knowledge_document
+                SET document_id = CASE
+                    WHEN instr(source_id, '#') > 0
+                    THEN substr(source_id, 1, instr(source_id, '#') - 1)
+                    ELSE source_id
+                END
+                WHERE document_id IS NULL OR document_id = ''"""
+            )
             db.execute("PRAGMA optimize")
             self._seed(db)
 
@@ -241,8 +485,10 @@ class DiagnosisRepository:
         )
         for source, source_id, title, content in documents:
             db.execute(
-                "INSERT OR IGNORE INTO knowledge_document VALUES (?, ?, ?, ?, ?, ?)",
-                (source, source_id, title, content, "ESP32", now),
+                """INSERT OR IGNORE INTO knowledge_document
+                (source, source_id, title, content, device_type, created_at, document_id, chunk_index)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (source, source_id, title, content, "ESP32", now, source_id, 0),
             )
         db.execute(
             """INSERT OR IGNORE INTO fault_case VALUES
@@ -297,6 +543,51 @@ class DiagnosisRepository:
             "temperature": status["temperature"],
             "uptime": status["uptime"],
             "last_seen": status["timestamp"],
+        }
+
+    def list_devices(
+        self,
+        device_type: str | None = None,
+        online: bool | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        query = "SELECT * FROM device"
+        params: list[Any] = []
+        if device_type:
+            query += " WHERE device_type = ?"
+            params.append(device_type)
+        query += " ORDER BY device_id"
+        with self._connect() as db:
+            devices = [dict(row) for row in db.execute(query, params).fetchall()]
+
+        items = []
+        for device in devices:
+            status = self.get_device_status(device["device_id"])
+            if status:
+                item = status
+            else:
+                item = {
+                    **device,
+                    "online": False,
+                    "reported_online": None,
+                    "heartbeat_fresh": False,
+                    "wifi_status": None,
+                    "rssi": None,
+                    "mqtt_status": None,
+                    "temperature": None,
+                    "uptime": None,
+                    "last_seen": None,
+                }
+            if online is None or item["online"] is online:
+                items.append(item)
+
+        total = len(items)
+        return {
+            "items": items[offset : offset + limit],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
         }
 
     def get_device_logs(
@@ -376,7 +667,11 @@ class DiagnosisRepository:
                 "uptime": current["uptime"],
                 "timestamp": current["last_seen"],
             }
-            self._external_call("mysql", "upsert_device_status", device, status)
+            self._external_write(
+                "mysql",
+                "upsert_device_status",
+                {"device": device, "status": status},
+            )
 
     def add_log(self, device_id: str, payload: dict[str, Any]) -> None:
         if not self.get_device_status(device_id):
@@ -399,7 +694,7 @@ class DiagnosisRepository:
                     item["timestamp"],
                 ),
             )
-        self._external_call("mysql", "add_log", item)
+        self._external_write("mysql", "add_log", item)
 
     def add_fault(self, device_id: str, payload: dict[str, Any]) -> None:
         fault_type = str(payload.get("fault_type") or payload.get("type") or "unknown")
@@ -425,6 +720,174 @@ class DiagnosisRepository:
                 selected,
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def list_knowledge_documents(
+        self,
+        source: str | None = None,
+        device_type: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        query = "SELECT * FROM knowledge_document"
+        clauses: list[str] = []
+        params: list[Any] = []
+        if source:
+            clauses.append("source = ?")
+            params.append(source)
+        if device_type:
+            clauses.append("device_type = ?")
+            params.append(device_type)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY source, document_id, chunk_index, source_id"
+        with self._connect() as db:
+            rows = [dict(row) for row in db.execute(query, params).fetchall()]
+
+        documents: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            document_id = row.get("document_id") or row["source_id"].split("#", 1)[0]
+            key = (row["source"], document_id)
+            if key not in documents:
+                documents[key] = {
+                    "source": row["source"],
+                    "document_id": document_id,
+                    "title": re.sub(r" \(\d+/\d+\)$", "", row["title"]),
+                    "device_type": row.get("device_type"),
+                    "chunk_count": 0,
+                    "content_chars": 0,
+                    "created_at": row["created_at"],
+                }
+            item = documents[key]
+            item["chunk_count"] += 1
+            item["content_chars"] += len(row["content"])
+            if row["created_at"] > item["created_at"]:
+                item["created_at"] = row["created_at"]
+
+        items = list(documents.values())
+        total = len(items)
+        return {
+            "items": items[offset : offset + limit],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    def replace_knowledge_document(
+        self,
+        *,
+        source: str,
+        document_id: str,
+        title: str,
+        chunks: list[str],
+        device_type: str | None,
+    ) -> dict[str, Any]:
+        created_at = iso()
+        items = [
+            {
+                "source": source,
+                "source_id": f"{document_id}#{index:04d}",
+                "document_id": document_id,
+                "chunk_index": index,
+                "title": title if len(chunks) == 1 else f"{title} ({index + 1}/{len(chunks)})",
+                "content": content,
+                "device_type": device_type,
+                "created_at": created_at,
+            }
+            for index, content in enumerate(chunks)
+        ]
+        with self._lock, self._connect() as db:
+            db.execute(
+                """DELETE FROM knowledge_document
+                WHERE source = ? AND (
+                    document_id = ? OR source_id = ? OR source_id LIKE ?
+                )""",
+                (source, document_id, document_id, f"{document_id}#%"),
+            )
+            db.executemany(
+                """INSERT INTO knowledge_document
+                (source, source_id, title, content, device_type, created_at, document_id, chunk_index)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    (
+                        item["source"],
+                        item["source_id"],
+                        item["title"],
+                        item["content"],
+                        item["device_type"],
+                        item["created_at"],
+                        item["document_id"],
+                        item["chunk_index"],
+                    )
+                    for item in items
+                ],
+            )
+
+        delete_payload = {"source": source, "document_id": document_id}
+        mysql_results = [self._external_write("mysql", "delete_document", delete_payload)]
+        vector_delete = self._external_write("qdrant", "delete_document", delete_payload)
+        for item in items:
+            mysql_results.append(self._external_write("mysql", "upsert_document", item))
+        vector_items = [self._knowledge_vector_document(item) for item in items]
+        indexed_count = self._qdrant_write_many(vector_items)
+        mysql_saved = all(mysql_results)
+        vector_indexed = vector_delete and indexed_count == len(vector_items)
+        sync_status = "complete" if mysql_saved and vector_indexed else (
+            "pending" if self.external_sync_status()["pending"] else "local_only"
+        )
+        return {
+            "source": source,
+            "document_id": document_id,
+            "chunk_count": len(items),
+            "chunk_ids": [item["source_id"] for item in items],
+            "mysql_saved": mysql_saved,
+            "vector_indexed": vector_indexed,
+            "sync_status": sync_status,
+        }
+
+    def rebuild_vector_index(self, sources: list[str] | None = None) -> dict[str, Any]:
+        allowed_sources = {
+            "fault_cases",
+            "mqtt_docs",
+            "wifi_docs",
+            "sensor_docs",
+            "device_docs",
+        }
+        selected = list(dict.fromkeys(sources or sorted(allowed_sources)))
+        if set(selected) - allowed_sources:
+            raise ValueError("INVALID_REQUEST")
+        started = time.perf_counter()
+        document_sources = [source for source in selected if source != "fault_cases"]
+        documents = [
+            self._knowledge_vector_document(item)
+            for item in self.knowledge_documents(document_sources)
+        ]
+        cases = (
+            [self._case_document(item) for item in self.fault_cases()]
+            if "fault_cases" in selected
+            else []
+        )
+        items = documents + cases
+        indexed = self._qdrant_write_many(items)
+        pending = self.external_sync_status()["by_component"].get("qdrant", 0)
+        target = self.external.qdrant
+        provider = getattr(getattr(target, "embedding_provider", None), "name", "disabled")
+        return {
+            "sources": selected,
+            "attempted": len(items),
+            "indexed": indexed,
+            "pending": pending,
+            "embedding_provider": provider,
+            "collection": getattr(target, "collection", None),
+            "dimensions": getattr(target, "dimensions", None),
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+            "sync_status": (
+                "complete"
+                if indexed == len(items) and target is not None
+                else "pending"
+                if pending
+                else "local_only"
+            ),
+        }
 
     def fault_cases(
         self, device_type: str | None = None, fault_type: str | None = None
@@ -489,14 +952,18 @@ class DiagnosisRepository:
             "created_at": now,
             "updated_at": now,
         }
-        mysql_saved = self._external_call("mysql", "upsert_fault_case", item)
-        vector_indexed = self._external_call("qdrant", "upsert", self._case_document(item))
+        mysql_saved = self._external_write("mysql", "upsert_fault_case", item)
+        vector_indexed = self._external_write("qdrant", "upsert", self._case_document(item))
+        sync_status = "complete" if mysql_saved and vector_indexed else (
+            "pending" if self.external_sync_status()["pending"] else "local_only"
+        )
         return {
             "fault_id": fault_id,
             "verified": True,
-            "indexed": True,
+            "indexed": vector_indexed,
             "mysql_saved": mysql_saved,
             "vector_indexed": vector_indexed,
+            "sync_status": sync_status,
             "created_at": now,
         }
 
@@ -507,10 +974,10 @@ class DiagnosisRepository:
                 """INSERT INTO diagnosis_record
                 (diagnosis_id, request_id, device_id, query, fault_type, fault_name, cause,
                  solutions_json, confidence, router_type, selected_sources_json,
-                 retrieved_documents_json, retrieval_count, rerank_count,
+                 retrieved_documents_json, result_json, retrieval_count, rerank_count,
                  retrieval_latency_ms, llm_latency_ms, total_latency_ms, input_tokens,
                  output_tokens, error, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     record["diagnosis_id"],
                     record["request_id"],
@@ -523,7 +990,18 @@ class DiagnosisRepository:
                     record["confidence"],
                     record["route"]["router"],
                     json.dumps(record["route"]["selected_sources"], ensure_ascii=False),
-                    json.dumps(record["sources"], ensure_ascii=False),
+                    json.dumps(
+                        record.get("trace_contexts", record["sources"]),
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(
+                        {
+                            key: value
+                            for key, value in record.items()
+                            if key not in {"trace_contexts", "request_id"}
+                        },
+                        ensure_ascii=False,
+                    ),
                     record["observability"]["retrieval_count"],
                     record["observability"]["rerank_count"],
                     record["observability"]["retrieval_latency_ms"],
@@ -535,11 +1013,113 @@ class DiagnosisRepository:
                     created_at,
                 ),
             )
-        self._external_call(
+        self._external_write(
             "mysql",
             "upsert_diagnosis",
             {**record, "created_at": created_at},
         )
+
+    def save_diagnosis_error(
+        self,
+        device_id: str,
+        query: str,
+        code: str,
+        message: str,
+    ) -> dict[str, str]:
+        diagnosis_id = f"DIA_{utc_now():%Y%m%d}_{uuid.uuid4().hex[:8].upper()}"
+        request_id = str(uuid.uuid4())
+        record = {
+            "diagnosis_id": diagnosis_id,
+            "request_id": request_id,
+            "device_id": device_id,
+            "query": query,
+            "fault_type": "unknown",
+            "fault_name": "Diagnosis failed",
+            "cause": message,
+            "solutions": [],
+            "confidence": 0.0,
+            "route": {"router": "failed", "selected_sources": []},
+            "sources": [],
+            "trace_contexts": [],
+            "observability": {
+                "retrieval_count": 0,
+                "rerank_count": 0,
+                "retrieval_latency_ms": 0.0,
+                "llm_latency_ms": 0.0,
+                "total_latency_ms": 0.0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "error": code,
+            },
+        }
+        self.save_diagnosis(record)
+        return {"diagnosis_id": diagnosis_id, "request_id": request_id}
+
+    def get_diagnosis_trace(self, diagnosis_id: str) -> dict[str, Any] | None:
+        with self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM diagnosis_record WHERE diagnosis_id = ?",
+                (diagnosis_id,),
+            ).fetchone()
+        if not row:
+            return None
+        item = self._diagnosis_record_from_row(dict(row))
+        item["contexts"] = item.pop("trace_contexts")
+        item.pop("sources")
+        return item
+
+    def list_diagnoses(
+        self,
+        device_id: str | None = None,
+        fault_type: str | None = None,
+        status: str = "all",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        query = "SELECT * FROM diagnosis_record"
+        clauses: list[str] = []
+        params: list[Any] = []
+        if device_id:
+            clauses.append("device_id = ?")
+            params.append(device_id)
+        if fault_type:
+            clauses.append("fault_type = ?")
+            params.append(fault_type)
+        if status == "succeeded":
+            clauses.append("error IS NULL")
+        elif status == "failed":
+            clauses.append("error IS NOT NULL")
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+
+        count_query = f"SELECT COUNT(*) FROM ({query})"
+        query += " ORDER BY created_at DESC, diagnosis_id DESC LIMIT ? OFFSET ?"
+        with self._connect() as db:
+            total = int(db.execute(count_query, params).fetchone()[0])
+            rows = db.execute(query, [*params, limit, offset]).fetchall()
+
+        return {
+            "items": [
+                {
+                    "diagnosis_id": row["diagnosis_id"],
+                    "device_id": row["device_id"],
+                    "query": row["query"],
+                    "fault_type": row["fault_type"],
+                    "fault_name": row["fault_name"],
+                    "confidence": row["confidence"],
+                    "router": row["router_type"],
+                    "selected_sources": json.loads(row["selected_sources_json"]),
+                    "status": "failed" if row["error"] else "succeeded",
+                    "error": row["error"],
+                    "total_latency_ms": row["total_latency_ms"],
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
 
     def vector_search(
         self, query: str, sources: list[str], top_k: int
@@ -555,4 +1135,4 @@ class DiagnosisRepository:
             return []
 
     def storage_status(self) -> dict[str, Any]:
-        return self.external.status()
+        return {**self.external.status(), "outbox": self.external_sync_status()}

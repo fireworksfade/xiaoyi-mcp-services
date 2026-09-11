@@ -33,13 +33,40 @@ class RouteDecision:
 
 def infer_fault_type(text: str) -> str:
     lowered = text.lower()
-    if "mqtt" in lowered or "broker" in lowered or "keep alive" in lowered:
+    if (
+        "mqtt" in lowered
+        or "broker" in lowered
+        or "keep alive" in lowered
+        or "unauthorized" in lowered
+        or "bad user name" in lowered
+    ):
         return "mqtt"
-    if "wifi" in lowered or "rssi" in lowered or "无线" in lowered:
+    if (
+        "wifi" in lowered
+        or "rssi" in lowered
+        or "无线" in lowered
+        or "latency" in lowered
+        or "packet loss" in lowered
+        or "延迟" in lowered
+        or "丢包" in lowered
+    ):
         return "wifi"
     if "温度" in lowered or "sensor" in lowered or "传感器" in lowered:
         return "sensor"
-    if "内存" in lowered or "heap" in lowered or "重启" in lowered:
+    if any(
+        marker in lowered
+        for marker in (
+            "内存",
+            "heap",
+            "重启",
+            "reboot",
+            "reset",
+            "watchdog",
+            "固件",
+            "firmware",
+            "oom",
+        )
+    ):
         return "device"
     return "unknown"
 
@@ -54,10 +81,17 @@ def route_query(
     realtime_patterns = (
         "当前rssi",
         "现在rssi",
+        "rssi多少",
         "当前温度",
+        "现在温度",
+        "温度多少",
         "设备在线",
         "是否在线",
+        "在线吗",
         "mqtt状态",
+        "mqtt连接状态",
+        "wifi状态",
+        "wifi连接状态",
         "当前状态",
     )
     diagnostic_markers = ("为什么", "原因", "故障", "异常", "断开", "超时", "失败")

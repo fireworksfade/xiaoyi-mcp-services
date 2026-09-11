@@ -1,33 +1,24 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import math
 import os
-import re
 import uuid
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import unquote, urlsplit
 from urllib.request import Request, urlopen
 
+from iot_diagnosis.embeddings import EmbeddingProvider, embedding_provider_from_env
+
 
 logger = logging.getLogger("xiaoyi.iot_diagnosis.external")
 
 
 def feature_vector(text: str, dimensions: int = 384) -> list[float]:
-    tokens = re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", text.lower())
-    compact = re.sub(r"\s+", "", text.lower())
-    tokens.extend(compact[index : index + 3] for index in range(max(0, len(compact) - 2)))
-    vector = [0.0] * dimensions
-    for token in tokens:
-        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
-        bucket = int.from_bytes(digest[:4], "big") % dimensions
-        sign = 1.0 if digest[4] & 1 else -1.0
-        vector[bucket] += sign
-    norm = math.sqrt(sum(value * value for value in vector))
-    return [value / norm for value in vector] if norm else vector
+    from iot_diagnosis.embeddings import HashEmbeddingProvider
+
+    return HashEmbeddingProvider(dimensions).embed(text)
 
 
 class MySQLMirror:
@@ -74,7 +65,8 @@ class MySQLMirror:
             """CREATE TABLE IF NOT EXISTS knowledge_document (
                 source VARCHAR(120) NOT NULL, source_id VARCHAR(160) NOT NULL,
                 title VARCHAR(300) NOT NULL, content TEXT NOT NULL, device_type VARCHAR(120),
-                created_at VARCHAR(64) NOT NULL, PRIMARY KEY(source, source_id)
+                created_at VARCHAR(64) NOT NULL, document_id VARCHAR(120), chunk_index INT NOT NULL DEFAULT 0,
+                PRIMARY KEY(source, source_id)
             ) CHARACTER SET utf8mb4""",
             """CREATE TABLE IF NOT EXISTS fault_case (
                 fault_id VARCHAR(120) PRIMARY KEY, device_id VARCHAR(120), device_type VARCHAR(120) NOT NULL,
@@ -89,13 +81,29 @@ class MySQLMirror:
                 fault_name VARCHAR(300) NOT NULL, cause TEXT NOT NULL, solutions_json JSON NOT NULL,
                 confidence DOUBLE NOT NULL, router_type VARCHAR(80) NOT NULL,
                 selected_sources_json JSON NOT NULL, retrieved_documents_json JSON NOT NULL,
-                observability_json JSON NOT NULL, created_at VARCHAR(64) NOT NULL
+                observability_json JSON NOT NULL, result_json JSON, created_at VARCHAR(64) NOT NULL
             ) CHARACTER SET utf8mb4""",
         )
         with self._connect() as db:
             with db.cursor() as cursor:
                 for statement in statements:
                     cursor.execute(statement)
+                cursor.execute("SHOW COLUMNS FROM knowledge_document")
+                knowledge_columns = {row[0] for row in cursor.fetchall()}
+                if "document_id" not in knowledge_columns:
+                    cursor.execute(
+                        "ALTER TABLE knowledge_document ADD COLUMN document_id VARCHAR(120) NULL"
+                    )
+                if "chunk_index" not in knowledge_columns:
+                    cursor.execute(
+                        "ALTER TABLE knowledge_document ADD COLUMN chunk_index INT NOT NULL DEFAULT 0"
+                    )
+                cursor.execute("SHOW COLUMNS FROM diagnosis_record")
+                diagnosis_columns = {row[0] for row in cursor.fetchall()}
+                if "result_json" not in diagnosis_columns:
+                    cursor.execute(
+                        "ALTER TABLE diagnosis_record ADD COLUMN result_json JSON NULL"
+                    )
 
     def upsert_device_status(self, device: dict[str, Any], status: dict[str, Any]) -> None:
         with self._connect() as db, db.cursor() as cursor:
@@ -182,12 +190,30 @@ class MySQLMirror:
     def upsert_document(self, item: dict[str, Any]) -> None:
         with self._connect() as db, db.cursor() as cursor:
             cursor.execute(
-                """INSERT INTO knowledge_document(source, source_id, title, content, device_type, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE
-                title=VALUES(title), content=VALUES(content), device_type=VALUES(device_type)""",
+                """INSERT INTO knowledge_document
+                (source, source_id, title, content, device_type, created_at, document_id, chunk_index)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE
+                title=VALUES(title), content=VALUES(content), device_type=VALUES(device_type),
+                document_id=VALUES(document_id), chunk_index=VALUES(chunk_index)""",
                 (
                     item["source"], item["source_id"], item["title"], item["content"],
-                    item.get("device_type"), item["created_at"],
+                    item.get("device_type"), item["created_at"], item.get("document_id"),
+                    int(item.get("chunk_index") or 0),
+                ),
+            )
+
+    def delete_document(self, item: dict[str, Any]) -> None:
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute(
+                """DELETE FROM knowledge_document
+                WHERE source=%s AND (
+                    document_id=%s OR source_id=%s OR source_id LIKE %s
+                )""",
+                (
+                    item["source"],
+                    item["document_id"],
+                    item["document_id"],
+                    f"{item['document_id']}#%",
                 ),
             )
 
@@ -210,23 +236,67 @@ class MySQLMirror:
             )
 
     def upsert_diagnosis(self, item: dict[str, Any]) -> None:
+        result = item.get("result") or {
+            key: value
+            for key, value in item.items()
+            if key not in {"trace_contexts", "request_id", "created_at", "result"}
+        }
         with self._connect() as db, db.cursor() as cursor:
             cursor.execute(
                 """INSERT INTO diagnosis_record
                 (diagnosis_id, request_id, device_id, query, fault_type, fault_name, cause,
                  solutions_json, confidence, router_type, selected_sources_json,
-                 retrieved_documents_json, observability_json, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE observability_json=VALUES(observability_json)""",
+                 retrieved_documents_json, observability_json, result_json, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE observability_json=VALUES(observability_json),
+                result_json=VALUES(result_json)""",
                 (
                     item["diagnosis_id"], item["request_id"], item["device_id"], item["query"],
                     item["fault_type"], item["fault_name"], item["cause"],
                     json.dumps(item["solutions"], ensure_ascii=False), item["confidence"],
                     item["route"]["router"],
                     json.dumps(item["route"]["selected_sources"], ensure_ascii=False),
-                    json.dumps(item["sources"], ensure_ascii=False),
-                    json.dumps(item["observability"], ensure_ascii=False), item["created_at"],
+                    json.dumps(
+                        item.get("trace_contexts", item["sources"]),
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(item["observability"], ensure_ascii=False),
+                    json.dumps(result, ensure_ascii=False), item["created_at"],
                 ),
+            )
+
+    def upsert_diagnoses(self, items: list[dict[str, Any]]) -> None:
+        if not items:
+            return
+        def result_snapshot(item: dict[str, Any]) -> dict[str, Any]:
+            return item.get("result") or {
+                key: value
+                for key, value in item.items()
+                if key not in {"trace_contexts", "request_id", "created_at", "result"}
+            }
+
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.executemany(
+                """INSERT INTO diagnosis_record
+                (diagnosis_id, request_id, device_id, query, fault_type, fault_name, cause,
+                 solutions_json, confidence, router_type, selected_sources_json,
+                 retrieved_documents_json, observability_json, result_json, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON DUPLICATE KEY UPDATE observability_json=VALUES(observability_json),
+                result_json=VALUES(result_json)""",
+                [
+                    (
+                        item["diagnosis_id"], item["request_id"], item["device_id"], item["query"],
+                        item["fault_type"], item["fault_name"], item["cause"],
+                        json.dumps(item["solutions"], ensure_ascii=False), item["confidence"],
+                        item["route"]["router"],
+                        json.dumps(item["route"]["selected_sources"], ensure_ascii=False),
+                        json.dumps(item.get("trace_contexts", item["sources"]), ensure_ascii=False),
+                        json.dumps(item["observability"], ensure_ascii=False),
+                        json.dumps(result_snapshot(item), ensure_ascii=False), item["created_at"],
+                    )
+                    for item in items
+                ],
             )
 
     def ping(self) -> bool:
@@ -236,17 +306,29 @@ class MySQLMirror:
 
 
 class QdrantVectorStore:
-    dimensions = 384
-
-    def __init__(self, url: str, collection: str):
+    def __init__(
+        self,
+        url: str,
+        collection: str,
+        embedding_provider: EmbeddingProvider | None = None,
+    ):
         self.url = url.rstrip("/")
         self.collection = collection
+        self.embedding_provider = embedding_provider or embedding_provider_from_env()
+        self.dimensions = self.embedding_provider.dimensions
         self._ensure_collection()
 
     def _ensure_collection(self) -> None:
         path = f"/collections/{self.collection}"
         try:
-            self._request("GET", path)
+            response = self._request("GET", path)
+            configured_size = (
+                (((response.get("result") or {}).get("config") or {}).get("params") or {})
+                .get("vectors", {})
+                .get("size")
+            )
+            if configured_size is not None and int(configured_size) != self.dimensions:
+                raise ValueError("QDRANT_COLLECTION_DIMENSIONS_MISMATCH")
             return
         except HTTPError as exc:
             if exc.code != 404:
@@ -269,27 +351,51 @@ class QdrantVectorStore:
             return json.loads(response.read().decode("utf-8"))
 
     def upsert(self, item: dict[str, Any]) -> bool:
-        source = str(item["source"])
-        source_id = str(item["id"])
-        point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source}:{source_id}"))
+        return self.upsert_many([item])
+
+    def upsert_many(self, items: list[dict[str, Any]]) -> bool:
+        if not items:
+            return True
+        embed_many = getattr(self.embedding_provider, "embed_many", None)
+        contents = [str(item["content"]) for item in items]
+        vectors = (
+            embed_many(contents)
+            if embed_many
+            else [self.embedding_provider.embed(content) for content in contents]
+        )
+        if len(vectors) != len(items):
+            raise RuntimeError("EMBEDDING_BATCH_SIZE_MISMATCH")
+        points = []
+        for item, vector in zip(items, vectors, strict=True):
+            source = str(item["source"])
+            source_id = str(item["id"])
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{source}:{source_id}"))
+            points.append({"id": point_id, "vector": vector, "payload": item})
         self._request(
             "PUT",
             f"/collections/{self.collection}/points?wait=true",
+            {"points": points},
+        )
+        return True
+
+    def delete_document(self, item: dict[str, Any]) -> bool:
+        self._request(
+            "POST",
+            f"/collections/{self.collection}/points/delete?wait=true",
             {
-                "points": [
-                    {
-                        "id": point_id,
-                        "vector": feature_vector(str(item["content"]), self.dimensions),
-                        "payload": item,
-                    }
-                ]
+                "filter": {
+                    "must": [
+                        {"key": "source", "match": {"value": item["source"]}},
+                        {"key": "document_id", "match": {"value": item["document_id"]}},
+                    ]
+                }
             },
         )
         return True
 
     def search(self, query: str, sources: list[str], top_k: int) -> list[dict[str, Any]]:
         payload: dict[str, Any] = {
-            "query": feature_vector(query, self.dimensions),
+            "query": self.embedding_provider.embed(query, is_query=True),
             "limit": top_k,
             "with_payload": True,
         }
@@ -314,36 +420,61 @@ class ExternalStores:
         self.mysql: MySQLMirror | None = None
         self.qdrant: QdrantVectorStore | None = None
         self.errors: dict[str, str] = {}
-        mysql_dsn = os.getenv("DIAGNOSIS_MYSQL_DSN", "").strip()
-        qdrant_url = os.getenv("DIAGNOSIS_QDRANT_URL", "").strip()
-        if mysql_dsn:
-            try:
-                self.mysql = MySQLMirror(mysql_dsn)
-            except Exception as exc:
-                self.errors["mysql"] = type(exc).__name__
-                logger.exception("MySQL mirror unavailable")
-        if qdrant_url:
-            try:
+        self.mysql_dsn = os.getenv("DIAGNOSIS_MYSQL_DSN", "").strip()
+        self.qdrant_url = os.getenv("DIAGNOSIS_QDRANT_URL", "").strip()
+        self.qdrant_collection = os.getenv(
+            "DIAGNOSIS_QDRANT_COLLECTION", "iot_diagnosis_knowledge"
+        )
+        self.configured = {
+            "mysql": bool(self.mysql_dsn),
+            "qdrant": bool(self.qdrant_url),
+        }
+        self.ensure_connected("mysql")
+        self.ensure_connected("qdrant")
+
+    def ensure_connected(self, component: str) -> bool:
+        if not self.configured.get(component):
+            return False
+        if getattr(self, component, None) is not None:
+            return True
+        try:
+            if component == "mysql":
+                self.mysql = MySQLMirror(self.mysql_dsn)
+            elif component == "qdrant":
                 self.qdrant = QdrantVectorStore(
-                    qdrant_url,
-                    os.getenv("DIAGNOSIS_QDRANT_COLLECTION", "iot_diagnosis_knowledge"),
+                    self.qdrant_url,
+                    self.qdrant_collection,
                 )
-            except Exception as exc:
-                self.errors["qdrant"] = type(exc).__name__
-                logger.exception("Qdrant vector store unavailable")
+            else:
+                return False
+            self.errors.pop(component, None)
+            return True
+        except Exception as exc:
+            self.errors[component] = type(exc).__name__
+            logger.warning("External %s connection unavailable: %s", component, type(exc).__name__)
+            return False
+
+    def is_configured(self, component: str) -> bool:
+        return bool(self.configured.get(component) or getattr(self, component, None))
 
     def status(self) -> dict[str, Any]:
         mysql_status = "disabled"
         qdrant_status = "disabled"
+        self.ensure_connected("mysql")
+        self.ensure_connected("qdrant")
         if self.mysql:
             try:
                 mysql_status = "connected" if self.mysql.ping() else "fallback"
+                if mysql_status == "connected":
+                    self.errors.pop("mysql", None)
             except Exception as exc:
                 mysql_status = "fallback"
                 self.errors["mysql"] = type(exc).__name__
         if self.qdrant:
             try:
                 qdrant_status = "connected" if self.qdrant.ping() else "fallback"
+                if qdrant_status == "connected":
+                    self.errors.pop("qdrant", None)
             except Exception as exc:
                 qdrant_status = "fallback"
                 self.errors["qdrant"] = type(exc).__name__
