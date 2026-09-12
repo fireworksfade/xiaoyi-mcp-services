@@ -7,6 +7,7 @@ import os
 import paho.mqtt.client as mqtt
 
 from iot_diagnosis.repository import DiagnosisRepository
+from iot_diagnosis.remediation import handle_remediation_event
 
 
 logger = logging.getLogger("xiaoyi.iot_diagnosis.mqtt")
@@ -41,6 +42,7 @@ class MQTTIngestor:
             "iot/+/logs",
             "iot/+/fault",
             "iot/+/heartbeat",
+            "iot/+/remediation",
         ):
             client.subscribe(topic, qos=1)
         logger.info("Subscribed to IoT diagnosis topics")
@@ -60,6 +62,18 @@ class MQTTIngestor:
             elif kind == "fault":
                 if isinstance(payload, dict):
                     self.repository.add_fault(device_id, payload)
+            elif kind == "remediation":
+                # 修复完成事件：沉淀案例并回发确认，供 Control 关联 case_id
+                if isinstance(payload, dict):
+                    confirmation = handle_remediation_event(
+                        self.repository, device_id, payload
+                    )
+                    if confirmation:
+                        self.client.publish(
+                            f"iot/{device_id}/remediation_case",
+                            json.dumps(confirmation, ensure_ascii=False),
+                            qos=1,
+                        )
             else:
                 if isinstance(payload, dict):
                     if kind == "heartbeat":

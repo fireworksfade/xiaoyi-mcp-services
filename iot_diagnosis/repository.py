@@ -1119,6 +1119,23 @@ class DiagnosisRepository:
         item.pop("sources")
         return item
 
+    def latest_remediation_diagnosis(
+        self, device_id: str, within_minutes: int = 60
+    ) -> dict[str, Any] | None:
+        """按设备找最近一次可用于案例沉淀的成功诊断（修复事件未带 diagnosis_id 时兜底）。"""
+        cutoff = iso(utc_now() - timedelta(minutes=within_minutes))
+        with self._connect() as db:
+            row = db.execute(
+                """SELECT * FROM diagnosis_record
+                WHERE device_id = ? AND error IS NULL AND fault_type != 'realtime_state'
+                  AND created_at >= ?
+                ORDER BY created_at DESC, diagnosis_id DESC LIMIT 1""",
+                (device_id, cutoff),
+            ).fetchone()
+        if not row:
+            return None
+        return self._diagnosis_record_from_row(dict(row))
+
     def list_diagnoses(
         self,
         device_id: str | None = None,
