@@ -71,6 +71,14 @@ docker exec last-work-iot-diagnosis-mcp-1 python /app/scripts/evaluate_rag.py --
 python -m iot_diagnosis.simulator --device-id ESP32_05 --scenario mqtt_timeout
 ```
 
+模拟器支持机群模式：一个进程内以线程模拟整个 ESP32 机群，拓扑由 `iot_diagnosis/fleet.json` 定义（12 台设备：8 台 normal、1 台 mqtt_timeout、1 台 wifi_weak、1 台 sensor_error、1 台 unstable 随机掉线恢复）。每台设备带部署位置命名、温度/RSSI 基线、固件版本与上报间隔，首次上报即自动注册进设备表：
+
+```powershell
+python -m iot_diagnosis.simulator --host 127.0.0.1 --fleet iot_diagnosis/fleet.json
+```
+
+在 `fleet.json` 中增删设备或调整 `temperature_base`/`rssi_base`/`interval` 即可改变机群规模与行为；`defaults` 段提供各设备的缺省值。注意：普通场景的 `temperature_base` 需低于 70 °C，否则会触发传感器异常误报（加载时校验）。单设备模式保留 `--device-id/--scenario/--interval` 原有用法；两种模式下 `docker compose stop` 都会让设备主动发布 offline 状态（`offline_reason=graceful_shutdown`），进程被强杀时由遗嘱代发 `client_lost`。
+
 运行在线协议验收：
 
 ```powershell
