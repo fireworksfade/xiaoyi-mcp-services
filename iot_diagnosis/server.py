@@ -18,6 +18,7 @@ from iot_diagnosis.embeddings import retrieval_model_status
 from iot_diagnosis.ingestion import ingest_text
 from iot_diagnosis.mqtt import MQTTIngestor
 from iot_diagnosis.repository import DiagnosisRepository
+from iot_diagnosis.retention import RetentionService
 from iot_diagnosis.retrieval import search_fault_cases as retrieve_fault_cases
 from iot_diagnosis.retrieval import search_knowledge as retrieve_knowledge
 
@@ -44,9 +45,39 @@ async def service_lifespan(_server):
                 await asyncio.to_thread(repository.retry_external_sync)
 
         sync_task = asyncio.create_task(retry_external_writes())
+    retention_task = None
+    retention_interval = max(
+        0.0, float(os.getenv("DIAGNOSIS_RETENTION_INTERVAL_HOURS", "6")) * 3600
+    )
+    if retention_interval:
+        retention_service = RetentionService(
+            os.getenv("DIAGNOSIS_DATABASE_PATH", "data/iot_diagnosis.db")
+        )
+
+        async def run_retention() -> None:
+            while True:
+                await asyncio.sleep(retention_interval)
+                try:
+                    # DELETE_ENABLED=false 时持续输出 dry-run 统计（作为指标暴露）
+                    report = await asyncio.to_thread(retention_service.run)
+                    logger.info(
+                        "retention scheduled run: %s",
+                        report.to_dict(),
+                        extra={"event": "retention_scheduled", **report.to_dict()},
+                    )
+                except Exception:
+                    logger.exception("retention run failed")
+
+        retention_task = asyncio.create_task(run_retention())
     try:
         yield {"mqtt_ingestor": ingestor}
     finally:
+        if retention_task:
+            retention_task.cancel()
+            try:
+                await retention_task
+            except asyncio.CancelledError:
+                pass
         if sync_task:
             sync_task.cancel()
             try:
