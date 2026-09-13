@@ -34,7 +34,11 @@ def test_empty_db_upgrade_creates_schema(tmp_path: Path, service: str) -> None:
     db_path = str(tmp_path / f"{service}.db")
     runner = _runner(service)
     result = runner.upgrade(db_path)
-    assert result["applied"] == ([1, 2] if service == "diagnosis" else [1])
+    expected = {
+        "diagnosis": [1, 2, 3],
+        "control": [1],
+    }[service]
+    assert result["applied"] == expected
     assert result["head"] == result["applied"][-1]
     with sqlite3.connect(db_path) as db:
         tables = {
@@ -185,7 +189,7 @@ def test_migrate_cli(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     try:
         assert migrate_cli.main(["--service", "diagnosis", "status"]) == 0
         first = capsys.readouterr().out
-        assert '"pending": [1, 2]' in first
+        assert '"pending": [1, 2, 3]' in first
 
         assert migrate_cli.main(["--service", "diagnosis", "upgrade", "--dry-run"]) == 0
         capsys.readouterr()

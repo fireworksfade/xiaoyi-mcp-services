@@ -34,9 +34,8 @@ class DiagnosisRepository:
         self._lock = threading.RLock()
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize(auto_migrate=auto_migrate)
+        # 启动只做本地初始化；外部同步交给 outbox 增量重试与显式 rebuild（WP-08）
         self.external = ExternalStores()
-        self.retry_external_sync()
-        self._sync_external_snapshot()
 
     @staticmethod
     def migration_runner() -> SQLiteMigrationRunner:
@@ -174,11 +173,19 @@ class DiagnosisRepository:
                 WHERE completed_at IS NULL
                 GROUP BY component"""
             ).fetchall()
+            oldest_pending = db.execute(
+                "SELECT MIN(created_at) FROM external_sync_outbox WHERE completed_at IS NULL"
+            ).fetchone()[0]
+            last_delivery = db.execute(
+                "SELECT MAX(completed_at) FROM external_sync_outbox WHERE completed_at IS NOT NULL"
+            ).fetchone()[0]
         by_component = {row["component"]: row["count"] for row in pending}
         return {
             "pending": sum(by_component.values()),
             "by_component": by_component,
             "max_attempts": max((row["max_attempts"] for row in pending), default=0),
+            "oldest_pending_at": oldest_pending,
+            "last_delivery_at": last_delivery,
         }
 
     @staticmethod
@@ -227,49 +234,6 @@ class DiagnosisRepository:
             for item in batch:
                 self._enqueue_external_sync("qdrant", "upsert", item)
         return indexed
-
-    def _sync_external_snapshot(self) -> None:
-        with self._connect() as db:
-            devices = {row["device_id"]: dict(row) for row in db.execute("SELECT * FROM device")}
-            statuses = [
-                {
-                    **dict(row),
-                    "timestamp": row["device_timestamp"] or row["received_at"],
-                }
-                for row in db.execute("SELECT * FROM device_current_state")
-            ]
-            logs = [dict(row) for row in db.execute("SELECT * FROM device_log")]
-            documents = [dict(row) for row in db.execute("SELECT * FROM knowledge_document")]
-            diagnosis_rows = [dict(row) for row in db.execute("SELECT * FROM diagnosis_record")]
-        cases = self.fault_cases()
-        if self.external.is_configured("mysql"):
-            if not self._external_call(
-                "mysql", "upsert_device_statuses", list(devices.values()), statuses
-            ):
-                for status in statuses:
-                    device = devices.get(status["device_id"])
-                    if device:
-                        self._enqueue_external_sync(
-                            "mysql",
-                            "upsert_device_status",
-                            {"device": device, "status": status},
-                        )
-            if not self._external_call("mysql", "add_logs", logs):
-                for item in logs:
-                    self._enqueue_external_sync("mysql", "add_log", item)
-        vector_documents = []
-        for item in documents:
-            self._external_write("mysql", "upsert_document", item)
-            vector_documents.append(self._knowledge_vector_document(item))
-        for item in cases:
-            self._external_write("mysql", "upsert_fault_case", item)
-            vector_documents.append(self._case_document(item))
-        self._qdrant_write_many(vector_documents)
-        diagnoses = [self._diagnosis_record_from_row(item) for item in diagnosis_rows]
-        if diagnoses and self.external.is_configured("mysql"):
-            if not self._external_call("mysql", "upsert_diagnoses", diagnoses):
-                for item in diagnoses:
-                    self._enqueue_external_sync("mysql", "upsert_diagnosis", item)
 
     @staticmethod
     def _diagnosis_record_from_row(item: dict[str, Any]) -> dict[str, Any]:

@@ -663,14 +663,8 @@ def test_external_write_outbox_recovers_without_false_index_success(tmp_path) ->
     assert repository.external_sync_status()["pending"] == 0
 
 
-def test_startup_snapshot_backfills_all_external_data_after_recovery(tmp_path) -> None:
+def test_outbox_retry_delivers_after_recovery(tmp_path) -> None:
     repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
-    trace = repository.save_diagnosis_error(
-        "ESP32_05",
-        "startup recovery test",
-        "UPSTREAM_UNAVAILABLE",
-        "temporary failure",
-    )
 
     class FlakyStore:
         def __init__(self):
@@ -690,13 +684,19 @@ def test_startup_snapshot_backfills_all_external_data_after_recovery(tmp_path) -
     qdrant = FlakyStore()
     repository.external.mysql = mysql
     repository.external.qdrant = qdrant
+    repository.external.configured["mysql"] = True
+    repository.external.configured["qdrant"] = True
 
-    repository._sync_external_snapshot()
-
+    # WP-08：启动不再执行全量快照同步；外部存储不可用时的写入进入 outbox
+    trace = repository.save_diagnosis_error(
+        "ESP32_05",
+        "startup recovery test",
+        "UPSTREAM_UNAVAILABLE",
+        "temporary failure",
+    )
     pending = repository.external_sync_status()
     assert pending["pending"] > 0
     assert pending["by_component"]["mysql"] > 0
-    assert pending["by_component"]["qdrant"] > 0
     with repository._connect() as db:
         queued_operations = {
             row["operation"]
@@ -722,12 +722,6 @@ def test_startup_snapshot_backfills_all_external_data_after_recovery(tmp_path) -
 
 def test_retry_reconnects_client_that_was_missing_at_startup(tmp_path, monkeypatch) -> None:
     repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
-    repository.save_diagnosis_error(
-        "ESP32_05",
-        "missing client recovery test",
-        "MYSQL_UNAVAILABLE",
-        "startup connection failed",
-    )
     availability = {"ready": False}
 
     class RecoveringMySQL:
@@ -748,8 +742,14 @@ def test_retry_reconnects_client_that_was_missing_at_startup(tmp_path, monkeypat
     repository.external.mysql_dsn = "mysql://test:test@mysql/test"
     repository.external.mysql = None
 
-    repository._sync_external_snapshot()
     assert repository.external.mysql is None
+    # 外部存储配置了但客户端缺失时，写入进入 outbox（不依赖启动全量同步）
+    repository.save_diagnosis_error(
+        "ESP32_05",
+        "missing client recovery test",
+        "MYSQL_UNAVAILABLE",
+        "startup connection failed",
+    )
     assert repository.external_sync_status()["by_component"]["mysql"] > 0
 
     availability["ready"] = True
