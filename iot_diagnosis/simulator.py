@@ -27,7 +27,7 @@ import paho.mqtt.client as mqtt
 
 logger = logging.getLogger(__name__)
 
-SCENARIOS = ("normal", "mqtt_timeout", "wifi_weak", "sensor_error", "unstable")
+SCENARIOS = ("normal", "mqtt_timeout", "wifi_weak", "sensor_error", "unstable", "memory_leak", "watchdog_reset")
 
 # unstable 场景参数：运行保护期后每个上报周期以该概率进入离线片段，
 # 片段时长在闭区间内随机，期间停止一切上报，模拟现场网络间歇性中断。
@@ -72,6 +72,8 @@ class DeviceState:
         self.wifi_weak = scenario == "wifi_weak"
         self.sensor_error = scenario == "sensor_error"
         self.unstable = scenario == "unstable"
+        self.memory_leak = scenario == "memory_leak"
+        self.watchdog_reset = scenario == "watchdog_reset"
         self.interval = interval
         self.firmware_version = firmware_version
         self.uptime = 86400
@@ -87,6 +89,8 @@ class DeviceState:
                 "wifi_weak": self.wifi_weak,
                 "sensor_error": self.sensor_error,
                 "unstable": self.unstable,
+                "memory_leak": self.memory_leak,
+                "watchdog_reset": self.watchdog_reset,
                 "interval": self.interval,
                 "firmware_version": self.firmware_version,
                 "uptime": self.uptime,
@@ -140,6 +144,8 @@ def handle_command(state: DeviceState, payload: dict) -> dict:
         if action == "restart_device":
             clear_network_faults()
             state.sensor_error = False
+            state.memory_leak = False
+            state.watchdog_reset = False
             state.uptime = 0
             return ack("applied", "设备已重启")
         if action == "update_firmware":
@@ -148,6 +154,8 @@ def handle_command(state: DeviceState, payload: dict) -> dict:
                 return ack("failed", "version 不能为空")
             clear_network_faults()
             state.sensor_error = False
+            state.memory_leak = False
+            state.watchdog_reset = False
             state.uptime = 0
             state.firmware_version = version.strip()
             return ack("applied", f"固件已升级到 {version.strip()}")
@@ -161,6 +169,12 @@ def handle_command(state: DeviceState, payload: dict) -> dict:
                 state.wifi_weak = True
             elif scenario == "sensor_error":
                 state.sensor_error = True
+            elif scenario == "memory_leak":
+                state.memory_leak = True
+            elif scenario == "watchdog_reset":
+                state.watchdog_reset = True
+                # 看门狗反复触发重启，uptime 停留在低位且不再累积
+                state.uptime = 600
             elif scenario == "unstable":
                 state.unstable = True
                 state.offline = False
@@ -170,6 +184,8 @@ def handle_command(state: DeviceState, payload: dict) -> dict:
                 state.wifi_weak = False
                 state.sensor_error = False
                 state.unstable = False
+                state.memory_leak = False
+                state.watchdog_reset = False
                 state.offline = False
                 state.offline_until = 0.0
             return ack("applied", f"已注入故障场景 {scenario}")
@@ -314,6 +330,59 @@ def build_cycle(
                     "fault_type": "mqtt_timeout",
                     "level": "ERROR",
                     "message": "MQTT keep alive timeout",
+                },
+            )
+        )
+    if snapshot["memory_leak"]:
+        messages.append(
+            (
+                "logs",
+                {
+                    "timestamp": timestamp,
+                    "level": "WARNING",
+                    "module": "heap",
+                    "message": (
+                        f"free heap {int(rng.uniform(24000, 42000))} bytes, "
+                        f"min ever {int(rng.uniform(18000, 23900))} bytes"
+                    ),
+                },
+            )
+        )
+        if rng.random() < 0.35:
+            messages.append(
+                (
+                    "fault",
+                    {
+                        "timestamp": timestamp,
+                        "fault_type": "out_of_memory",
+                        "level": "ERROR",
+                        "message": "heap: Allocation failed, out of memory",
+                    },
+                )
+            )
+    if snapshot["watchdog_reset"]:
+        messages.append(
+            (
+                "fault",
+                {
+                    "timestamp": timestamp,
+                    "fault_type": "watchdog_reset",
+                    "level": "ERROR",
+                    "message": (
+                        "Task watchdog got triggered: task uart_event did not "
+                        "reset the watchdog in time"
+                    ),
+                },
+            )
+        )
+        messages.append(
+            (
+                "logs",
+                {
+                    "timestamp": timestamp,
+                    "level": "CRITICAL",
+                    "module": "runtime",
+                    "message": "abort() was called at PC 0x400d1a2c, rebooting after panic",
                 },
             )
         )
@@ -511,7 +580,9 @@ class DeviceSimulator:
                 for suffix, payload in messages:
                     publish(client, f"iot/{device_id}/{suffix}", payload)
                 with self.state.lock:
-                    self.state.uptime += int(snapshot["interval"])
+                    if not snapshot["watchdog_reset"]:
+                        # 看门狗场景下设备反复重启，uptime 不累积
+                        self.state.uptime += int(snapshot["interval"])
                 # 分片睡眠，保证下行命令能及时修改上报间隔并快速响应停止信号
                 remaining = snapshot["interval"]
                 while remaining > 0 and not self._stop.is_set():

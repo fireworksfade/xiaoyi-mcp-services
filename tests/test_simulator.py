@@ -273,3 +273,51 @@ def test_inject_fault_rejects_unknown_scenario() -> None:
 
     missing = handle_command(state, {"command_id": "CMD_I7", "action": "inject_fault"})
     assert missing["status"] == "failed"
+
+
+def test_inject_fault_memory_leak_publishes_oom_logs_and_restart_clears() -> None:
+    state = DeviceState("normal", 10.0)
+    profile = _profile()
+
+    ack = handle_command(
+        state,
+        {"command_id": "CMD_I8", "action": "inject_fault", "parameters": {"scenario": "memory_leak"}},
+    )
+    assert ack["status"] == "applied"
+    assert state.memory_leak is True
+
+    # random()=0.0 触发 35% 概率的 OOM 错误日志
+    cycle = build_cycle(state, profile, FakeRng(random_values=[0.0]), elapsed=10.0, timestamp="t")
+    suffixes = _suffixes(cycle)
+    assert "logs" in suffixes and "fault" in suffixes
+    heap_log = next(p for s, p in cycle if s == "logs")
+    assert heap_log["module"] == "heap" and "heap" in heap_log["message"]
+    oom_fault = next(p for s, p in cycle if s == "fault")
+    assert oom_fault["fault_type"] == "out_of_memory"
+
+    handle_command(state, {"command_id": "CMD_I9", "action": "restart_device"})
+    assert state.memory_leak is False
+
+
+def test_inject_fault_watchdog_resets_uptime_and_firmware_clears() -> None:
+    state = DeviceState("normal", 10.0)
+    profile = _profile()
+
+    ack = handle_command(
+        state,
+        {"command_id": "CMD_I10", "action": "inject_fault", "parameters": {"scenario": "watchdog_reset"}},
+    )
+    assert ack["status"] == "applied"
+    assert state.watchdog_reset is True and state.uptime == 600
+
+    cycle = build_cycle(state, profile, FakeRng(), elapsed=10.0, timestamp="t")
+    fault = next(p for s, p in cycle if s == "fault")
+    assert "watchdog" in fault["message"]
+    logs = [p for s, p in cycle if s == "logs"]
+    assert any(item["level"] == "CRITICAL" for item in logs)
+
+    handle_command(
+        state,
+        {"command_id": "CMD_I11", "action": "update_firmware", "parameters": {"version": "1.3.1"}},
+    )
+    assert state.watchdog_reset is False

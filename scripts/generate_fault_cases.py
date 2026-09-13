@@ -73,10 +73,15 @@ class CasePlan:
     action: str
     parameters: dict[str, Any]
     high_risk: bool
+    query: str = ""
 
     @property
     def mode(self) -> str:
         return "proposal" if self.high_risk else "direct"
+
+    @property
+    def diagnosis_query(self) -> str:
+        return self.query or DIAGNOSIS_QUERY[self.scenario]
 
 
 def build_plans(rounds: int) -> list[CasePlan]:
@@ -92,6 +97,7 @@ def build_plans(rounds: int) -> list[CasePlan]:
                     action=LOW_ACTION[scenario],
                     parameters={},
                     high_risk=False,
+                    query=DIAGNOSIS_QUERY[scenario],
                 )
             )
     if rounds >= 2:
@@ -100,16 +106,75 @@ def build_plans(rounds: int) -> list[CasePlan]:
         plans[len(DEVICES) + 3] = CasePlan(
             device_id=DEVICES[3], scenario="mqtt_timeout",
             action="restart_device", parameters={}, high_risk=True,
+            query=DIAGNOSIS_QUERY["mqtt_timeout"],
         )
         plans[len(DEVICES) + 6] = CasePlan(
             device_id=DEVICES[6], scenario="unstable",
             action="update_firmware", parameters={"version": "1.3.1"}, high_risk=True,
+            query=DIAGNOSIS_QUERY["unstable"],
         )
         plans[len(DEVICES) + 9] = CasePlan(
             device_id=DEVICES[9], scenario="wifi_weak",
             action="restart_device", parameters={}, high_risk=True,
+            query=DIAGNOSIS_QUERY["wifi_weak"],
         )
     return plans
+
+
+# 多样化模式：同一底层故障场景配以不同的现场症状叙述，
+# 让诊断引擎产出不同的故障定名与根因分析，避免案例内容同质化。
+VARIETY_PLANS: tuple[tuple[str, str, str, dict[str, Any], bool, str], ...] = (
+    ("ESP32_01", "mqtt_timeout", "reconnect_mqtt", {}, False,
+     "设备每次建立 MQTT 连接后几秒内就断开，回执显示 broker 主动关闭连接，怀疑是 Broker 侧会话过期或重连风暴导致"),
+    ("ESP32_02", "mqtt_timeout", "restart_device", {}, True,
+     "MQTT 频繁报 authentication failed，连接被 Broker 拒绝，设备侧凭证可能配置错误导致反复重连失败"),
+    ("ESP32_03", "mqtt_timeout", "reconnect_mqtt", {}, False,
+     "设备上报数据持续丢包，publish 超时重试明显增多，网络往返延迟变大，疑似无线链路质量劣化拖垮了 MQTT 会话"),
+    ("ESP32_04", "wifi_weak", "reconnect_wifi", {}, False,
+     "设备所在车间新增大功率变频器后 WiFi 信道干扰加剧，信号强度尚可但误码率上升、吞吐下降，需要重选信道重连"),
+    ("ESP32_05", "wifi_weak", "restart_device", {}, True,
+     "设备部署在金属机柜内，WiFi 信号被屏蔽衰减，偶尔出现关联失败 assoc rejected，需复位射频模块重新扫描接入点"),
+    ("ESP32_06", "sensor_error", "calibrate_sensor", {}, False,
+     "温度读数相比相邻设备系统性偏高约 5 摄氏度，疑似 ADC 参考电压漂移或校准系数失效，需要执行零点重新标定"),
+    ("ESP32_07", "sensor_error", "restart_device", {}, True,
+     "温度读数间歇性跳变为异常值，其余时段正常，疑似接线端子氧化接触不良或电磁干扰造成采样毛刺，先重启设备观察"),
+    ("ESP32_08", "unstable", "reconnect_wifi", {}, False,
+     "设备夜间时段反复离线数分钟后自行恢复，白天正常，怀疑 AP 负载均衡或终端节能策略把设备踢下线，需重建关联"),
+    ("ESP32_09", "unstable", "update_firmware", {"version": "1.3.1"}, True,
+     "设备固件版本较旧，长时间运行后 WiFi 驱动疑似内存泄漏导致周期性掉线，建议升级到 1.3.1 修复版本"),
+    ("ESP32_10", "mqtt_timeout", "reconnect_mqtt", {}, False,
+     "设备跨 NAT 网关接入 MQTT，长时间空闲后连接静默失效，TCP 仍在但 PINGREQ 无响应，疑似 NAT 表项超时未续保"),
+    ("ESP32_11", "sensor_error", "calibrate_sensor", {}, False,
+     "温度传感器已连续使用三年以上，读数与标准温度计偏差逐年增大，老化漂移超出允许误差，需现场校准修正"),
+    ("ESP32_12", "unstable", "restart_device", {}, True,
+     "设备每日 DHCP 租约到期续约失败导致 IP 丢失断网数分钟后自动恢复，网络配置异常需复位网络栈观察"),
+    ("ESP32_02", "memory_leak", "restart_device", {}, True,
+     "设备长时间运行后越来越卡，日志里 free heap 持续下降并出现 out of memory 分配失败，疑似固件内存泄漏"),
+    ("ESP32_05", "memory_leak", "restart_device", {}, True,
+     "设备遥测上传正常但每日凌晨重启一次，串口日志记录 heap allocation failed，怀疑缓冲区未释放耗尽内存"),
+    ("ESP32_09", "memory_leak", "update_firmware", {"version": "1.3.1"}, True,
+     "设备运行 48 小时后响应迟缓，空闲堆从 180KB 降至 30KB 以下并触发 OOM，官方修复版本声称解决内存泄漏，建议升级"),
+    ("ESP32_03", "watchdog_reset", "restart_device", {}, True,
+     "设备每天多次自动重启，日志反复出现 Task watchdog got triggered 与 panic abort，复位后短时间内再次复现"),
+    ("ESP32_07", "watchdog_reset", "update_firmware", {"version": "1.3.1"}, True,
+     "设备看门狗反复超时复位，uptime 始终不超过十分钟，串口记录 uart_event 任务阻塞，疑似固件任务调度缺陷"),
+    ("ESP32_11", "watchdog_reset", "restart_device", {}, True,
+     "设备远程重启后数小时再次失联，日志显示看门狗触发任务阻塞转储，需要确认是软件死锁还是外部中断风暴"),
+)
+
+
+def build_variety_plans() -> list[CasePlan]:
+    return [
+        CasePlan(
+            device_id=device_id,
+            scenario=scenario,
+            action=action,
+            parameters=parameters,
+            high_risk=high_risk,
+            query=query,
+        )
+        for device_id, scenario, action, parameters, high_risk, query in VARIETY_PLANS
+    ]
 
 
 class McpCaller:
@@ -284,7 +349,7 @@ async def run_case(
         "diagnose_fault",
         {
             "device_id": plan.device_id,
-            "query": DIAGNOSIS_QUERY[plan.scenario],
+            "query": plan.diagnosis_query,
             "use_realtime_state": True,
         },
     )
@@ -328,9 +393,18 @@ async def main() -> None:
     parser.add_argument("--rounds", type=int, default=2)
     parser.add_argument("--fault-wait", type=float, default=14.0)
     parser.add_argument("--limit", type=int, default=None, help="仅执行前 N 条（冒烟验证用）")
+    parser.add_argument(
+        "--mode",
+        choices=("standard", "variety"),
+        default="standard",
+        help="standard: 机群×场景矩阵；variety: 差异化症状叙述 × 多动作组合",
+    )
+    parser.add_argument("--start", type=int, default=0, help="跳过前 N 条计划（分批执行用）")
     args = parser.parse_args()
 
-    plans = build_plans(args.rounds)
+    plans = build_variety_plans() if args.mode == "variety" else build_plans(args.rounds)
+    if args.start > 0:
+        plans = plans[args.start :]
     if args.limit is not None:
         plans = plans[: args.limit]
     token = os.getenv("DIAGNOSIS_MCP_BEARER_TOKEN", "")
