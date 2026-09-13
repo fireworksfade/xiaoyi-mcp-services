@@ -177,6 +177,16 @@ def list_knowledge_documents(
 
 
 @mcp.tool(annotations=read_only)
+def list_fault_cases(
+    device_type: Annotated[str | None, Field(max_length=120)] = None,
+    limit: Annotated[int, Field(ge=1, le=200)] = 50,
+    offset: Annotated[int, Field(ge=0, le=100_000)] = 0,
+) -> dict[str, Any]:
+    """分页列出已验证故障案例（含沉淀来源与根因摘要，不含逐条日志）。"""
+    return success(repository.list_fault_cases(device_type, limit, offset))
+
+
+@mcp.tool(annotations=read_only)
 def search_fault_cases(
     query: Annotated[str, Field(min_length=1, max_length=2000)],
     device_type: Annotated[str | None, Field(max_length=120)] = "ESP32",
@@ -304,6 +314,26 @@ def delete_knowledge_document(
         return failure(str(exc), "知识文档参数无效")
     except Exception:
         return failure("DATABASE_ERROR", "知识文档删除失败", retryable=True)
+
+
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=True,
+        openWorldHint=False,
+    )
+)
+def delete_fault_case(
+    fault_id: Annotated[str, Field(min_length=2, max_length=32)],
+) -> dict[str, Any]:
+    """删除一条已验证故障案例，并同步清理 MySQL 镜像与 Qdrant 向量。"""
+    try:
+        return success(repository.delete_fault_case(fault_id))
+    except ValueError:
+        return failure("FAULT_ID_INVALID", "案例编号无效")
+    except Exception:
+        return failure("DATABASE_ERROR", "故障案例删除失败", retryable=True)
 
 
 @mcp.tool(

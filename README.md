@@ -11,7 +11,7 @@ python -m iot_diagnosis.server
 - 就绪检查：`http://127.0.0.1:9001/ready`
 - 数据库：默认 `data/iot_diagnosis.db`，可通过 `DIAGNOSIS_DATABASE_PATH` 修改
 
-保留六个 v1.0 核心工具，并新增 `get_diagnosis_trace`、`ingest_knowledge_text`、`rebuild_vector_index`、`list_devices`、`list_diagnoses` 和 `list_knowledge_documents`，共 12 个工具。三个列表工具支持过滤和 `limit`/`offset` 分页，使 Agent 无需预先知道设备、诊断或文档 ID。写入型工具需要在主后端中显式启用；人工案例只有在 `verified=true` 且 `verified_by` 非空时才会写入。向量重建以 SQLite 为事实源，可按来源批量重建 Qdrant 索引。
+保留六个 v1.0 核心工具，并新增 `get_diagnosis_trace`、`ingest_knowledge_text`、`rebuild_vector_index`、`list_devices`、`list_diagnoses`、`list_knowledge_documents`、`list_fault_cases` 和 `delete_fault_case`，共 14 个工具。列表工具支持过滤和 `limit`/`offset` 分页，使 Agent 无需预先知道设备、诊断、文档或案例 ID。写入型工具需要在主后端中显式启用；人工案例只有在 `verified=true` 且 `verified_by` 非空时才会写入。`delete_fault_case` 会同步清理 MySQL 镜像与 Qdrant 向量（按案例 payload 的 `document_id` 过滤），要求先执行 `rebuild_vector_index(["fault_cases"])` 让存量案例向量携带该字段。向量重建以 SQLite 为事实源，可按来源批量重建 Qdrant 索引。
 
 SQLite 是本地事实源。MySQL/Qdrant 写入失败会进入持久化 outbox，后台按 `DIAGNOSIS_SYNC_RETRY_SECONDS` 重试，健康结果中的 `storage.outbox` 会显示积压。
 

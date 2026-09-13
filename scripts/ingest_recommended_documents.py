@@ -70,6 +70,43 @@ DOCUMENTS = (
         "MOSQUITTO_BROKER_DIAG",
         "Mosquitto Broker 配置与日志诊断",
     ),
+    # 官方技术文档：随服务打包的权威参考资料，入库后参与语义检索
+    (
+        "ESP_MQTT_OFFICIAL_GUIDE.md",
+        "mqtt_docs",
+        "ESP_MQTT_OFFICIAL_GUIDE",
+        "ESP-IDF MQTT 官方指南",
+    ),
+    (
+        "MOSQUITTO_CONF_MAN_PAGE.md",
+        "mqtt_docs",
+        "MOSQUITTO_CONF_MAN_PAGE",
+        "Mosquitto.conf 配置手册",
+    ),
+    (
+        "ESP_WIFI_DRIVER_GUIDE.md",
+        "wifi_docs",
+        "ESP_WIFI_DRIVER_GUIDE",
+        "ESP32 WiFi 驱动官方指南",
+    ),
+    (
+        "ESP_FATAL_ERRORS_GUIDE.md",
+        "device_docs",
+        "ESP_FATAL_ERRORS_GUIDE",
+        "ESP32 致命错误官方指南",
+    ),
+    (
+        "ESP_RESET_REASONS_GUIDE.md",
+        "device_docs",
+        "ESP_RESET_REASONS_GUIDE",
+        "ESP32 复位原因官方指南",
+    ),
+    (
+        "ESP_WATCHDOG_OFFICIAL_GUIDE.md",
+        "device_docs",
+        "ESP_WATCHDOG_OFFICIAL_GUIDE",
+        "ESP32 Watchdog 官方指南",
+    ),
 )
 
 

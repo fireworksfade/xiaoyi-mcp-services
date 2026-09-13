@@ -188,6 +188,8 @@ class DiagnosisRepository:
         return {
             "source": "fault_cases",
             "id": item["fault_id"],
+            # Qdrant 删除按 payload 的 document_id 过滤，案例删除链路依赖该字段
+            "document_id": item["fault_id"],
             "title": item["fault_name"],
             "content": content,
             "device_type": item["device_type"],
@@ -962,6 +964,45 @@ class DiagnosisRepository:
             result.append(item)
         return result
 
+    def list_fault_cases(
+        self,
+        device_type: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """分页列出已验证案例（不含逐条日志正文），供案例库浏览。"""
+        query = "SELECT * FROM fault_case WHERE verified = 1"
+        params: list[Any] = []
+        if device_type:
+            query += " AND device_type = ?"
+            params.append(device_type)
+        count_query = f"SELECT COUNT(*) FROM ({query})"
+        query += " ORDER BY created_at DESC, fault_id DESC LIMIT ? OFFSET ?"
+        with self._connect() as db:
+            total = int(db.execute(count_query, params).fetchone()[0])
+            rows = db.execute(query, [*params, limit, offset]).fetchall()
+        return {
+            "items": [
+                {
+                    "fault_id": row["fault_id"],
+                    "device_id": row["device_id"],
+                    "device_type": row["device_type"],
+                    "fault_type": row["fault_type"],
+                    "fault_name": row["fault_name"],
+                    "symptoms": json.loads(row["symptoms_json"]),
+                    "cause": row["cause"],
+                    "solution": row["solution"],
+                    "verified_by": row["verified_by"],
+                    "source": row["source"],
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
     def add_verified_fault_case(self, payload: dict[str, Any]) -> dict[str, Any]:
         fault_id = f"F{uuid.uuid4().hex[:8].upper()}"
         now = iso()
@@ -1016,6 +1057,28 @@ class DiagnosisRepository:
             "vector_indexed": vector_indexed,
             "sync_status": sync_status,
             "created_at": now,
+        }
+
+    def delete_fault_case(self, fault_id: str) -> dict[str, Any]:
+        """删除一条已验证案例，并同步清理 MySQL 镜像与 Qdrant 向量。"""
+        if not re.fullmatch(r"F[A-Za-z0-9]{1,31}", fault_id or ""):
+            raise ValueError("FAULT_ID_INVALID")
+        with self._lock, self._connect() as db:
+            cursor = db.execute("DELETE FROM fault_case WHERE fault_id = ?", (fault_id,))
+            deleted = cursor.rowcount
+        mysql_payload = {"fault_id": fault_id}
+        vector_payload = {"source": "fault_cases", "document_id": fault_id}
+        mysql_saved = self._external_write("mysql", "delete_fault_case", mysql_payload)
+        vector_deleted = self._external_write("qdrant", "delete_document", vector_payload)
+        sync_status = "complete" if mysql_saved and vector_deleted else (
+            "pending" if self.external_sync_status()["pending"] else "local_only"
+        )
+        return {
+            "fault_id": fault_id,
+            "deleted": bool(deleted),
+            "mysql_saved": mysql_saved,
+            "vector_deleted": vector_deleted,
+            "sync_status": sync_status,
         }
 
     def save_diagnosis(self, record: dict[str, Any]) -> None:

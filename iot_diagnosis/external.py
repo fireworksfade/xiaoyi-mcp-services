@@ -217,6 +217,13 @@ class MySQLMirror:
                 ),
             )
 
+    def delete_fault_case(self, item: dict[str, Any]) -> None:
+        with self._connect() as db, db.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM fault_case WHERE fault_id=%s",
+                (item["fault_id"],),
+            )
+
     def upsert_fault_case(self, item: dict[str, Any]) -> None:
         with self._connect() as db, db.cursor() as cursor:
             cursor.execute(

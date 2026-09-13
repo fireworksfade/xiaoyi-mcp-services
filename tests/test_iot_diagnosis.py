@@ -99,6 +99,8 @@ async def test_core_tools_are_discoverable_and_callable(tmp_path, monkeypatch) -
             "get_diagnosis_trace",
             "list_diagnoses",
             "list_knowledge_documents",
+            "list_fault_cases",
+            "delete_fault_case",
             "ingest_knowledge_text",
             "search_knowledge",
             "search_fault_cases",
@@ -916,3 +918,62 @@ async def test_tool_schemas_keep_optional_params_optional() -> None:
             assert not (nullable or type_nullable), (
                 f"{tool.name}.{name} 是可空参数却出现在 required 中"
             )
+
+
+def test_list_and_delete_fault_cases(tmp_path) -> None:
+    """案例库分页列表与删除：删除需同步清理镜像与向量（本地降级 local_only）。"""
+    repository = DiagnosisRepository(str(tmp_path / "cases.db"))
+    base = {
+        "device_id": "ESP32_05",
+        "fault_type": "mqtt_connection",
+        "fault_name": "MQTT keep alive 超时",
+        "symptoms": ["心跳超时"],
+        "logs": ["ERROR mqtt keep alive timeout"],
+        "cause": "网络抖动导致心跳丢失",
+        "solution": "重连 Broker 并放宽超时",
+    }
+    first = repository.add_verified_fault_case({**base, "verified_by": "auto-remediation:C1"})
+    second = repository.add_verified_fault_case(
+        {**base, "fault_name": "传感器读数卡死", "fault_type": "sensor_anomaly", "verified_by": "admin"}
+    )
+
+    # 初始库会种子一条 F105 案例，因此总数为 3
+    listed = repository.list_fault_cases()
+    assert listed["total"] == 3
+    by_id = {item["fault_id"]: item for item in listed["items"]}
+    assert {first["fault_id"], second["fault_id"]} <= set(by_id)
+    assert by_id[second["fault_id"]]["verified_by"] == "admin"
+    assert by_id[second["fault_id"]]["symptoms"] == ["心跳超时"]
+    assert by_id[first["fault_id"]]["verified_by"] == "auto-remediation:C1"
+
+    filtered = repository.list_fault_cases(limit=1)
+    assert filtered["total"] == 3 and len(filtered["items"]) == 1
+
+    removed = repository.delete_fault_case(first["fault_id"])
+    assert removed["deleted"] is True
+    assert removed["sync_status"] in ("complete", "local_only")
+    remaining = {item["fault_id"] for item in repository.list_fault_cases()["items"]}
+    assert remaining == {second["fault_id"], "F105"}
+
+    missing = repository.delete_fault_case("F00000000")
+    assert missing["deleted"] is False
+
+    with pytest.raises(ValueError):
+        repository.delete_fault_case("not-a-case-id")
+
+
+def test_case_vector_document_carries_document_id() -> None:
+    """Qdrant 删除按 document_id 过滤，案例向量 payload 必须携带该字段。"""
+    document = DiagnosisRepository._case_document(
+        {
+            "fault_id": "FTEST0001",
+            "fault_name": "MQTT keep alive 超时",
+            "symptoms": ["心跳超时"],
+            "logs": ["ERROR timeout"],
+            "cause": "网络抖动",
+            "solution": "重连",
+            "device_type": "ESP32",
+        }
+    )
+    assert document["source"] == "fault_cases"
+    assert document["document_id"] == "FTEST0001"
