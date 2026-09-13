@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
@@ -53,6 +54,8 @@ class MQTTIngestor:
             if len(parts) != 3 or parts[0] != "iot":
                 return
             device_id, kind = parts[1], parts[2]
+            # received_at：服务端收到消息的 UTC 时间；设备时间只作展示/诊断
+            received_at = datetime.now(timezone.utc).isoformat()
             if kind == "logs":
                 entries = payload if isinstance(payload, list) else [payload]
                 for entry in entries:
@@ -71,11 +74,18 @@ class MQTTIngestor:
                             json.dumps(confirmation, ensure_ascii=False),
                             qos=1,
                         )
-            else:
+            elif kind == "status":
                 if isinstance(payload, dict):
-                    if kind == "heartbeat":
-                        payload = {**payload, "online": True}
-                    self.repository.upsert_status(device_id, payload)
+                    # /status：更新 current state 与元数据，不写历史序列
+                    self.repository.apply_status(device_id, payload, received_at)
+            elif kind == "telemetry":
+                if isinstance(payload, dict):
+                    # /telemetry：追加历史测量（去重）并合并 current state
+                    self.repository.append_telemetry(device_id, payload, received_at)
+            else:  # heartbeat：只更新 last seen / online / uptime
+                if isinstance(payload, dict):
+                    payload = {**payload, "online": True}
+                    self.repository.touch_heartbeat(device_id, payload, received_at)
         except Exception:
             logger.exception("Failed to ingest MQTT message from %s", message.topic)
 
