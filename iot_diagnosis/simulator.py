@@ -151,6 +151,28 @@ def handle_command(state: DeviceState, payload: dict) -> dict:
             state.uptime = 0
             state.firmware_version = version.strip()
             return ack("applied", f"固件已升级到 {version.strip()}")
+        if action == "inject_fault":
+            scenario = parameters.get("scenario")
+            if not isinstance(scenario, str) or scenario not in SCENARIOS:
+                return ack("failed", f"scenario 必须是 {', '.join(SCENARIOS)} 之一")
+            if scenario == "mqtt_timeout":
+                state.mqtt_timeout = True
+            elif scenario == "wifi_weak":
+                state.wifi_weak = True
+            elif scenario == "sensor_error":
+                state.sensor_error = True
+            elif scenario == "unstable":
+                state.unstable = True
+                state.offline = False
+                state.offline_until = 0.0
+            else:  # normal：清除全部故障标志，恢复健康上报
+                state.mqtt_timeout = False
+                state.wifi_weak = False
+                state.sensor_error = False
+                state.unstable = False
+                state.offline = False
+                state.offline_until = 0.0
+            return ack("applied", f"已注入故障场景 {scenario}")
         return ack("failed", f"不支持的动作: {action}")
 
 

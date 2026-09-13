@@ -508,26 +508,6 @@ class DiagnosisRepository:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (source, source_id, title, content, "ESP32", now, source_id, 0),
             )
-        db.execute(
-            """INSERT OR IGNORE INTO fault_case VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                "F105",
-                "ESP32_05",
-                "ESP32",
-                "mqtt",
-                "MQTT Keep Alive异常",
-                json.dumps(["MQTT频繁掉线"], ensure_ascii=False),
-                json.dumps(["MQTT keep alive timeout"], ensure_ascii=False),
-                "Keep Alive参数或 Broker 超时设置异常",
-                "检查客户端心跳并将 Keep Alive 调整到合理区间",
-                1,
-                "seed",
-                "built_in",
-                now,
-                now,
-            ),
-        )
 
     def get_device_status(self, device_id: str) -> dict[str, Any] | None:
         with self._connect() as db:

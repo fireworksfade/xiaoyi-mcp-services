@@ -107,6 +107,102 @@ DOCUMENTS = (
         "ESP_WATCHDOG_OFFICIAL_GUIDE",
         "ESP32 Watchdog 官方指南",
     ),
+    (
+        "ESP_NETIF_GUIDE.md",
+        "wifi_docs",
+        "ESP_NETIF_GUIDE",
+        "ESP-NETIF 网络接口官方指南",
+    ),
+    (
+        "ESP_LWIP_STACK_GUIDE.md",
+        "wifi_docs",
+        "ESP_LWIP_STACK_GUIDE",
+        "ESP-IDF LwIP 网络栈官方指南",
+    ),
+    (
+        "ESP_EVENT_GUIDE.md",
+        "device_docs",
+        "ESP_EVENT_GUIDE",
+        "ESP-IDF 事件循环（ESP Event）官方指南",
+    ),
+    (
+        "ESP_I2C_DRIVER_GUIDE.md",
+        "sensor_docs",
+        "ESP_I2C_DRIVER_GUIDE",
+        "ESP-IDF I2C 驱动官方指南",
+    ),
+    (
+        "ESP_ADC_CALIBRATION_GUIDE.md",
+        "sensor_docs",
+        "ESP_ADC_CALIBRATION_GUIDE",
+        "ESP-IDF ADC 校准官方指南",
+    ),
+    (
+        "ESP_GPIO_DRIVER_GUIDE.md",
+        "device_docs",
+        "ESP_GPIO_DRIVER_GUIDE",
+        "ESP-IDF GPIO 驱动官方指南",
+    ),
+    (
+        "ESP_POWER_MANAGEMENT_GUIDE.md",
+        "device_docs",
+        "ESP_POWER_MANAGEMENT_GUIDE",
+        "ESP-IDF 电源管理官方指南",
+    ),
+    (
+        "ESP_SLEEP_MODES_GUIDE.md",
+        "device_docs",
+        "ESP_SLEEP_MODES_GUIDE",
+        "ESP-IDF 睡眠模式与唤醒源官方指南",
+    ),
+    (
+        "ESP_HTTPS_OTA_GUIDE.md",
+        "device_docs",
+        "ESP_HTTPS_OTA_GUIDE",
+        "ESP-IDF HTTPS OTA 升级官方指南",
+    ),
+    (
+        "ESP_MEM_ALLOC_GUIDE.md",
+        "device_docs",
+        "ESP_MEM_ALLOC_GUIDE",
+        "ESP-IDF 堆内存分配官方指南",
+    ),
+    (
+        "ESP_LOG_LIBRARY_GUIDE.md",
+        "device_docs",
+        "ESP_LOG_LIBRARY_GUIDE",
+        "ESP-IDF 日志库官方指南",
+    ),
+    (
+        "ESP_NVS_STORAGE_GUIDE.md",
+        "device_docs",
+        "ESP_NVS_STORAGE_GUIDE",
+        "ESP-IDF NVS 存储官方指南",
+    ),
+    (
+        "MOSQUITTO_TLS_MAN_PAGE.md",
+        "mqtt_docs",
+        "MOSQUITTO_TLS_MAN_PAGE",
+        "Mosquitto TLS 配置手册",
+    ),
+    (
+        "MOSQUITTO_PASSWD_MAN_PAGE.md",
+        "mqtt_docs",
+        "MOSQUITTO_PASSWD_MAN_PAGE",
+        "mosquitto_passwd 认证手册",
+    ),
+    (
+        "esp_intermittent_offline_diagnosis.md",
+        "wifi_docs",
+        "ESP_INTERMITTENT_OFFLINE_DIAG",
+        "ESP32 设备间歇离线诊断",
+    ),
+    (
+        "esp_ota_upgrade_diagnosis.md",
+        "device_docs",
+        "ESP_OTA_UPGRADE_DIAG",
+        "ESP32 OTA 固件升级失败诊断",
+    ),
 )
 
 

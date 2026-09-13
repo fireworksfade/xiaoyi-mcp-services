@@ -79,6 +79,8 @@ python -m iot_diagnosis.simulator --host 127.0.0.1 --fleet iot_diagnosis/fleet.j
 
 在 `fleet.json` 中增删设备或调整 `temperature_base`/`rssi_base`/`interval` 即可改变机群规模与行为；`defaults` 段提供各设备的缺省值。注意：普通场景的 `temperature_base` 需低于 70 °C，否则会触发传感器异常误报（加载时校验）。单设备模式保留 `--device-id/--scenario/--interval` 原有用法；两种模式下 `docker compose stop` 都会让设备主动发布 offline 状态（`offline_reason=graceful_shutdown`），进程被强杀时由遗嘱代发 `client_lost`。
 
+模拟器额外支持 `inject_fault` 下行动作（`iot/{device_id}/cmd`，参数 `scenario` 取 SCENARIOS 之一，`normal` 表示清除全部故障标志），可对任意节点动态注入/解除故障，配合批量案例脚本复用整个机群。在诊断容器内运行 `python scripts/generate_fault_cases.py [--rounds 2]` 可批量执行「注入故障 → 诊断 → 修复闭环 → 自动沉淀」生成真实案例（低风险直执行，高风险走提案审批后自动批准，结束时机群恢复健康）；`python scripts/purge_fault_cases.py` 逐条清空案例库并同步清理 MySQL 镜像与 Qdrant 向量。
+
 运行在线协议验收：
 
 ```powershell

@@ -32,8 +32,9 @@ SOURCE_PROTOTYPES = {
         "读数 量程 温度 temperature 异常值 无数据"
     ),
     "device_docs": (
-        "固件 firmware 重启 reboot 复位 reset 内存 heap 内存泄漏 碎片 "
-        "看门狗 watchdog core dump backtrace 崩溃 crash panic 栈"
+        "固件 firmware OTA 升级 upgrade 重启 reboot 复位 reset 内存 heap 内存泄漏 碎片 "
+        "看门狗 watchdog core dump backtrace 崩溃 crash panic 栈 存储 NVS 分区 "
+        "电源管理 power management 睡眠 sleep 唤醒 wake 事件 event 日志 log GPIO"
     ),
     "fault_cases": (
         "已验证的故障案例 历史维修记录 根因分析 解决方案 verified case "
@@ -82,7 +83,12 @@ def semantic_sources(
             reverse=True,
         )
         topic_sources = [source for source, _ in scored if source != "fault_cases"]
-        top_source, top_score = scored[0] if scored else ("", 0.0)
+        if not topic_sources:
+            return []
+        # fault_cases 恒定入选，主题源必须从其余来源中挑选，
+        # 否则案例原型得分最高时会导致主题文档源全部丢失
+        top_source = topic_sources[0]
+        top_score = dict(scored)[top_source]
         selected = ["fault_cases", top_source]
         second = dict(scored).get(topic_sources[1]) if len(topic_sources) > 1 else 0.0
         if second and second >= 0.9 * top_score:

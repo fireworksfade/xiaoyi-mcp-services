@@ -212,3 +212,64 @@ def test_unstable_recovered_by_reconnect_wifi() -> None:
     assert state.offline is False
     status = current_status(state, profile=profile, rng=FakeRng())
     assert status["online"] is True
+
+
+def test_inject_fault_sets_flags_and_clears_with_normal() -> None:
+    state = DeviceState("normal", 10.0)
+    profile = _profile()
+
+    ack = handle_command(
+        state,
+        {"command_id": "CMD_I1", "action": "inject_fault", "parameters": {"scenario": "mqtt_timeout"}},
+    )
+    assert ack["status"] == "applied"
+    assert state.mqtt_timeout is True
+    assert current_status(state, profile=profile, rng=FakeRng())["mqtt_status"] == "disconnected"
+
+    handle_command(
+        state,
+        {"command_id": "CMD_I2", "action": "inject_fault", "parameters": {"scenario": "sensor_error"}},
+    )
+    assert state.sensor_error is True
+    assert current_status(state, profile=profile, rng=FakeRng())["temperature"] == 78.0
+
+    recovered = handle_command(
+        state,
+        {"command_id": "CMD_I3", "action": "inject_fault", "parameters": {"scenario": "normal"}},
+    )
+    assert recovered["status"] == "applied"
+    assert state.mqtt_timeout is False and state.sensor_error is False
+    status = current_status(state, profile=profile, rng=FakeRng())
+    assert status["mqtt_status"] == "connected" and status["temperature"] != 78.0
+
+
+def test_inject_fault_unstable_then_reconnect_wifi_clears() -> None:
+    state = DeviceState("normal", 10.0)
+    profile = _profile()
+
+    ack = handle_command(
+        state,
+        {"command_id": "CMD_I4", "action": "inject_fault", "parameters": {"scenario": "unstable"}},
+    )
+    assert ack["status"] == "applied"
+    assert state.unstable is True
+
+    handle_command(state, {"command_id": "CMD_I5", "action": "reconnect_wifi"})
+
+    # reconnect_wifi 终结离线片段；unstable 是持久场景标志，由 inject normal 清除
+    assert state.offline is False
+    status = current_status(state, profile=profile, rng=FakeRng())
+    assert status["online"] is True
+
+
+def test_inject_fault_rejects_unknown_scenario() -> None:
+    state = DeviceState("normal", 10.0)
+
+    ack = handle_command(
+        state,
+        {"command_id": "CMD_I6", "action": "inject_fault", "parameters": {"scenario": "on_fire"}},
+    )
+    assert ack["status"] == "failed"
+
+    missing = handle_command(state, {"command_id": "CMD_I7", "action": "inject_fault"})
+    assert missing["status"] == "failed"

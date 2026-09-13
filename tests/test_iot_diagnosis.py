@@ -200,6 +200,19 @@ def test_reingesting_legacy_document_replaces_unsuffixed_chunk(tmp_path) -> None
 async def test_router_retrieval_diagnosis_and_traceability(tmp_path, monkeypatch) -> None:
     repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
     monkeypatch.setattr(server, "repository", repository)
+    # 案例库不再随种子内置，这里补一条案例以验证 fault_cases 参与多源检索
+    repository.add_verified_fault_case(
+        {
+            "device_id": "ESP32_05",
+            "fault_type": "mqtt_connection",
+            "fault_name": "MQTT keep alive 超时",
+            "symptoms": ["MQTT 频繁掉线"],
+            "logs": ["MQTT keep alive timeout"],
+            "cause": "Keep Alive 配置过短且网络抖动",
+            "solution": "重连 Broker 并调大 Keep Alive",
+            "verified_by": "test",
+        }
+    )
 
     async with Client(server.mcp) as client:
         realtime = await client.call_tool(
@@ -937,9 +950,8 @@ def test_list_and_delete_fault_cases(tmp_path) -> None:
         {**base, "fault_name": "传感器读数卡死", "fault_type": "sensor_anomaly", "verified_by": "admin"}
     )
 
-    # 初始库会种子一条 F105 案例，因此总数为 3
     listed = repository.list_fault_cases()
-    assert listed["total"] == 3
+    assert listed["total"] == 2
     by_id = {item["fault_id"]: item for item in listed["items"]}
     assert {first["fault_id"], second["fault_id"]} <= set(by_id)
     assert by_id[second["fault_id"]]["verified_by"] == "admin"
@@ -947,13 +959,13 @@ def test_list_and_delete_fault_cases(tmp_path) -> None:
     assert by_id[first["fault_id"]]["verified_by"] == "auto-remediation:C1"
 
     filtered = repository.list_fault_cases(limit=1)
-    assert filtered["total"] == 3 and len(filtered["items"]) == 1
+    assert filtered["total"] == 2 and len(filtered["items"]) == 1
 
     removed = repository.delete_fault_case(first["fault_id"])
     assert removed["deleted"] is True
     assert removed["sync_status"] in ("complete", "local_only")
     remaining = {item["fault_id"] for item in repository.list_fault_cases()["items"]}
-    assert remaining == {second["fault_id"], "F105"}
+    assert remaining == {second["fault_id"]}
 
     missing = repository.delete_fault_case("F00000000")
     assert missing["deleted"] is False
