@@ -24,10 +24,17 @@ RSSI、温度、在线状态、WiFi/MQTT 连接状态等实时问题由 Rule Rou
 模型服务：
 
 ```text
-GET  http://127.0.0.1:9010/health
+GET  http://127.0.0.1:9010/live            # 进程存活（始终 200）
+GET  http://127.0.0.1:9010/ready           # 两模型加载完成才 200；加载中 503 status=loading
+GET  http://127.0.0.1:9010/health          # 兼容旧探针，语义与 /ready 相同
 POST http://127.0.0.1:9010/v1/embeddings
 POST http://127.0.0.1:9010/rerank
 ```
+
+模型缓存模式由 `MODEL_CACHE_MODE` 控制（默认 `download`：允许联网下载缺失文件到持久卷；
+`offline`：禁止下载，缓存不完整时 `/ready` 返回 503 与 `MODEL_CACHE_INCOMPLETE`）。
+缓存可用性可用 `python -m scripts.check_model_cache` 预先校验（退出码 0 表示完整）。
+GPU 档位要求约 4 GiB 空闲显存、约 2.5 GiB 首次下载磁盘与 5–20 分钟冷启动时间。
 
 ## 文档摄取
 
