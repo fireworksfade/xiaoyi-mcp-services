@@ -42,65 +42,19 @@ class MySQLMirror:
         return pymysql.connect(**self.params)
 
     def ensure_schema(self) -> None:
-        statements = (
-            """CREATE TABLE IF NOT EXISTS device (
-                device_id VARCHAR(120) PRIMARY KEY, device_type VARCHAR(120) NOT NULL,
-                name VARCHAR(200) NOT NULL, firmware_version VARCHAR(120), created_at VARCHAR(64) NOT NULL
-            ) CHARACTER SET utf8mb4""",
-            """CREATE TABLE IF NOT EXISTS device_status (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY, device_id VARCHAR(120) NOT NULL,
-                online BOOLEAN NOT NULL, wifi_status VARCHAR(80) NOT NULL, rssi INT,
-                mqtt_status VARCHAR(80) NOT NULL, temperature DOUBLE, uptime BIGINT,
-                timestamp VARCHAR(64) NOT NULL, UNIQUE KEY uq_device_status_time(device_id, timestamp),
-                INDEX idx_device_status_latest(device_id, timestamp)
-            ) CHARACTER SET utf8mb4""",
-            """CREATE TABLE IF NOT EXISTS device_log (
-                id BIGINT AUTO_INCREMENT PRIMARY KEY, device_id VARCHAR(120) NOT NULL,
-                level VARCHAR(32) NOT NULL, module VARCHAR(120) NOT NULL, message TEXT NOT NULL,
-                timestamp VARCHAR(64) NOT NULL,
-                UNIQUE KEY uq_device_log_entry(device_id, timestamp, module, message(191)),
-                INDEX idx_device_log_latest(device_id, timestamp)
-            ) CHARACTER SET utf8mb4""",
-            """CREATE TABLE IF NOT EXISTS knowledge_document (
-                source VARCHAR(120) NOT NULL, source_id VARCHAR(160) NOT NULL,
-                title VARCHAR(300) NOT NULL, content TEXT NOT NULL, device_type VARCHAR(120),
-                created_at VARCHAR(64) NOT NULL, document_id VARCHAR(120), chunk_index INT NOT NULL DEFAULT 0,
-                PRIMARY KEY(source, source_id)
-            ) CHARACTER SET utf8mb4""",
-            """CREATE TABLE IF NOT EXISTS fault_case (
-                fault_id VARCHAR(120) PRIMARY KEY, device_id VARCHAR(120), device_type VARCHAR(120) NOT NULL,
-                fault_type VARCHAR(120) NOT NULL, fault_name VARCHAR(300) NOT NULL,
-                symptoms_json JSON NOT NULL, logs_json JSON NOT NULL, cause TEXT NOT NULL,
-                solution TEXT NOT NULL, verified BOOLEAN NOT NULL, verified_by VARCHAR(160) NOT NULL,
-                source VARCHAR(120) NOT NULL, created_at VARCHAR(64) NOT NULL, updated_at VARCHAR(64) NOT NULL
-            ) CHARACTER SET utf8mb4""",
-            """CREATE TABLE IF NOT EXISTS diagnosis_record (
-                diagnosis_id VARCHAR(120) PRIMARY KEY, request_id VARCHAR(120) NOT NULL,
-                device_id VARCHAR(120) NOT NULL, query TEXT NOT NULL, fault_type VARCHAR(120) NOT NULL,
-                fault_name VARCHAR(300) NOT NULL, cause TEXT NOT NULL, solutions_json JSON NOT NULL,
-                confidence DOUBLE NOT NULL, router_type VARCHAR(80) NOT NULL,
-                selected_sources_json JSON NOT NULL, retrieved_documents_json JSON NOT NULL,
-                observability_json JSON NOT NULL, result_json JSON, created_at VARCHAR(64) NOT NULL
-            ) CHARACTER SET utf8mb4""",
-        )
-        with self._connect() as db:
-            with db.cursor() as cursor:
-                for statement in statements:
-                    cursor.execute(statement)
-                cursor.execute("SHOW COLUMNS FROM knowledge_document")
-                knowledge_columns = {row[0] for row in cursor.fetchall()}
-                if "document_id" not in knowledge_columns:
-                    cursor.execute(
-                        "ALTER TABLE knowledge_document ADD COLUMN document_id VARCHAR(120) NULL"
-                    )
-                if "chunk_index" not in knowledge_columns:
-                    cursor.execute(
-                        "ALTER TABLE knowledge_document ADD COLUMN chunk_index INT NOT NULL DEFAULT 0"
-                    )
-                cursor.execute("SHOW COLUMNS FROM diagnosis_record")
-                diagnosis_columns = {row[0] for row in cursor.fetchall()}
-                if "result_json" not in diagnosis_columns:
-                    cursor.execute("ALTER TABLE diagnosis_record ADD COLUMN result_json JSON NULL")
+        """外部 MySQL schema 走有序迁移（幂等 DDL），不在读写路径动态建表。"""
+        from pathlib import Path
+
+        from common.migrations import MySqlMigration, MySQLMigrationRunner, load_migration_module
+
+        migration_dir = Path(__file__).resolve().parent / "mysql_migrations"
+        migrations = [
+            MySqlMigration.of(load_migration_module(path))
+            for path in sorted(migration_dir.glob("0*.py"))
+            if not path.name.startswith("__")
+        ]
+        runner = MySQLMigrationRunner(migrations, service="iot_diagnosis-mysql")
+        runner.ensure(self._connect)
 
     def upsert_device_status(self, device: dict[str, Any], status: dict[str, Any]) -> None:
         with self._connect() as db, db.cursor() as cursor:

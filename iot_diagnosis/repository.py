@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from common.migrations import SQLiteMigrationRunner, load_migrations_from_dir
 from iot_diagnosis.external import ExternalStores
 
 logger = logging.getLogger("xiaoyi.iot_diagnosis.repository")
@@ -27,15 +28,22 @@ def iso(value: datetime | None = None) -> str:
 
 
 class DiagnosisRepository:
-    def __init__(self, path: str, offline_after_seconds: int = 120):
+    def __init__(self, path: str, offline_after_seconds: int = 120, *, auto_migrate: bool = True):
         self.path = path
         self.offline_after_seconds = max(1, offline_after_seconds)
         self._lock = threading.RLock()
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
+        self._initialize(auto_migrate=auto_migrate)
         self.external = ExternalStores()
         self.retry_external_sync()
         self._sync_external_snapshot()
+
+    @staticmethod
+    def migration_runner() -> SQLiteMigrationRunner:
+        return SQLiteMigrationRunner(
+            load_migrations_from_dir(Path(__file__).resolve().parent / "migrations"),
+            service="iot_diagnosis",
+        )
 
     def _external_call(self, component: str, method: str, *args) -> bool:
         self.external.ensure_connected(component)
@@ -315,142 +323,14 @@ class DiagnosisRepository:
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
-    def _initialize(self) -> None:
+    def _initialize(self, *, auto_migrate: bool = True) -> None:
+        """Repository 构造只做初始化/验证：空库执行迁移，已有库验证版本。"""
+        runner = self.migration_runner()
+        if auto_migrate:
+            runner.initialize(self.path)
+        else:
+            runner.verify(self.path)
         with self._connect() as db:
-            db.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS device (
-                    device_id TEXT PRIMARY KEY,
-                    device_type TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    firmware_version TEXT,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS device_status (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    device_id TEXT NOT NULL REFERENCES device(device_id),
-                    online INTEGER NOT NULL,
-                    wifi_status TEXT NOT NULL,
-                    rssi INTEGER,
-                    mqtt_status TEXT NOT NULL,
-                    temperature REAL,
-                    uptime INTEGER,
-                    timestamp TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS ix_device_status_latest
-                    ON device_status(device_id, timestamp DESC);
-                CREATE TABLE IF NOT EXISTS device_log (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    device_id TEXT NOT NULL REFERENCES device(device_id),
-                    level TEXT NOT NULL,
-                    module TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    timestamp TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS ix_device_log_latest
-                    ON device_log(device_id, timestamp DESC);
-                CREATE TABLE IF NOT EXISTS knowledge_document (
-                    source TEXT NOT NULL,
-                    source_id TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    device_type TEXT,
-                    created_at TEXT NOT NULL,
-                    PRIMARY KEY(source, source_id)
-                );
-                CREATE TABLE IF NOT EXISTS fault_case (
-                    fault_id TEXT PRIMARY KEY,
-                    device_id TEXT,
-                    device_type TEXT NOT NULL,
-                    fault_type TEXT NOT NULL,
-                    fault_name TEXT NOT NULL,
-                    symptoms_json TEXT NOT NULL,
-                    logs_json TEXT NOT NULL,
-                    cause TEXT NOT NULL,
-                    solution TEXT NOT NULL,
-                    verified INTEGER NOT NULL,
-                    verified_by TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS diagnosis_record (
-                    diagnosis_id TEXT PRIMARY KEY,
-                    request_id TEXT NOT NULL,
-                    device_id TEXT NOT NULL,
-                    query TEXT NOT NULL,
-                    fault_type TEXT NOT NULL,
-                    fault_name TEXT NOT NULL,
-                    cause TEXT NOT NULL,
-                    solutions_json TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    router_type TEXT NOT NULL,
-                    selected_sources_json TEXT NOT NULL,
-                    retrieved_documents_json TEXT NOT NULL,
-                    result_json TEXT,
-                    retrieval_count INTEGER NOT NULL,
-                    rerank_count INTEGER NOT NULL,
-                    retrieval_latency_ms REAL NOT NULL DEFAULT 0,
-                    llm_latency_ms REAL NOT NULL DEFAULT 0,
-                    total_latency_ms REAL NOT NULL,
-                    input_tokens INTEGER NOT NULL DEFAULT 0,
-                    output_tokens INTEGER NOT NULL DEFAULT 0,
-                    error TEXT,
-                    created_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS external_sync_outbox (
-                    id TEXT PRIMARY KEY,
-                    dedupe_key TEXT NOT NULL UNIQUE,
-                    component TEXT NOT NULL,
-                    operation TEXT NOT NULL,
-                    payload_json TEXT NOT NULL,
-                    attempts INTEGER NOT NULL DEFAULT 0,
-                    last_error TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    completed_at TEXT,
-                    claimed_at TEXT
-                );
-                CREATE INDEX IF NOT EXISTS ix_external_sync_pending
-                    ON external_sync_outbox(completed_at, created_at);
-                """
-            )
-            diagnosis_columns = {
-                row[1] for row in db.execute("PRAGMA table_info(diagnosis_record)").fetchall()
-            }
-            for name, definition in {
-                "retrieval_latency_ms": "REAL NOT NULL DEFAULT 0",
-                "llm_latency_ms": "REAL NOT NULL DEFAULT 0",
-                "input_tokens": "INTEGER NOT NULL DEFAULT 0",
-                "output_tokens": "INTEGER NOT NULL DEFAULT 0",
-                "error": "TEXT",
-                "result_json": "TEXT",
-            }.items():
-                if name not in diagnosis_columns:
-                    db.execute(f"ALTER TABLE diagnosis_record ADD COLUMN {name} {definition}")
-            knowledge_columns = {
-                row[1] for row in db.execute("PRAGMA table_info(knowledge_document)").fetchall()
-            }
-            for name, definition in {
-                "document_id": "TEXT",
-                "chunk_index": "INTEGER NOT NULL DEFAULT 0",
-            }.items():
-                if name not in knowledge_columns:
-                    db.execute(f"ALTER TABLE knowledge_document ADD COLUMN {name} {definition}")
-            outbox_columns = {
-                row[1] for row in db.execute("PRAGMA table_info(external_sync_outbox)").fetchall()
-            }
-            if "claimed_at" not in outbox_columns:
-                db.execute("ALTER TABLE external_sync_outbox ADD COLUMN claimed_at TEXT")
-            db.execute(
-                """UPDATE knowledge_document
-                SET document_id = CASE
-                    WHEN instr(source_id, '#') > 0
-                    THEN substr(source_id, 1, instr(source_id, '#') - 1)
-                    ELSE source_id
-                END
-                WHERE document_id IS NULL OR document_id = ''"""
-            )
             db.execute("PRAGMA optimize")
             self._seed(db)
 

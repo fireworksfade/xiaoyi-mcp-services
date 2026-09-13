@@ -11,6 +11,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from common.migrations import SQLiteMigrationRunner, load_migrations_from_dir
+
 logger = logging.getLogger("xiaoyi.iot_control.repository")
 
 
@@ -37,6 +39,8 @@ class ControlRepository:
         command_timeout_seconds: int = 30,
         verify_window_seconds: int = 60,
         proposal_ttl_minutes: int = 30,
+        *,
+        auto_migrate: bool = True,
     ):
         self.path = path
         self.command_timeout_seconds = max(1, command_timeout_seconds)
@@ -47,7 +51,7 @@ class ControlRepository:
         # 最终结论会写回命令与提案行。
         self._watches: dict[str, dict[str, Any]] = {}
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
+        self._initialize(auto_migrate=auto_migrate)
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
@@ -55,71 +59,20 @@ class ControlRepository:
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
-    def _initialize(self) -> None:
-        with self._connect() as db:
-            db.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS device_command (
-                    command_id TEXT PRIMARY KEY,
-                    device_id TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    parameters_json TEXT NOT NULL DEFAULT '{}',
-                    reason TEXT NOT NULL DEFAULT '',
-                    issued_by TEXT NOT NULL DEFAULT '',
-                    risk_level TEXT NOT NULL,
-                    proposal_id TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    verify_status TEXT,
-                    ack_json TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    acked_at TEXT
-                );
-                CREATE INDEX IF NOT EXISTS idx_command_device
-                    ON device_command(device_id, created_at);
-                CREATE TABLE IF NOT EXISTS remediation_proposal (
-                    proposal_id TEXT PRIMARY KEY,
-                    device_id TEXT NOT NULL,
-                    action TEXT NOT NULL,
-                    parameters_json TEXT NOT NULL DEFAULT '{}',
-                    reason TEXT NOT NULL DEFAULT '',
-                    impact TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    version INTEGER NOT NULL DEFAULT 1,
-                    expires_at TEXT NOT NULL,
-                    task_status TEXT,
-                    command_id TEXT,
-                    decided_by TEXT,
-                    decided_at TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS idx_proposal_status
-                    ON remediation_proposal(status, created_at);
-                """
-            )
-            self._migrate(db)
-
     @staticmethod
-    def _migrate(db: sqlite3.Connection) -> None:
-        """为已有库补齐案例归档相关列（v1.1）。"""
-        command_columns = {
-            row[1] for row in db.execute("PRAGMA table_info(device_command)").fetchall()
-        }
-        for column, ddl in (
-            ("diagnosis_id", "TEXT"),
-            ("case_status", "TEXT"),
-            ("case_id", "TEXT"),
-            ("case_attempts", "INTEGER NOT NULL DEFAULT 0"),
-            ("case_error", "TEXT"),
-        ):
-            if column not in command_columns:
-                db.execute(f"ALTER TABLE device_command ADD COLUMN {column} {ddl}")
-        proposal_columns = {
-            row[1] for row in db.execute("PRAGMA table_info(remediation_proposal)").fetchall()
-        }
-        if "diagnosis_id" not in proposal_columns:
-            db.execute("ALTER TABLE remediation_proposal ADD COLUMN diagnosis_id TEXT")
+    def migration_runner() -> SQLiteMigrationRunner:
+        return SQLiteMigrationRunner(
+            load_migrations_from_dir(Path(__file__).resolve().parent / "migrations"),
+            service="iot_control",
+        )
+
+    def _initialize(self, *, auto_migrate: bool = True) -> None:
+        """Repository 构造只做初始化/验证：空库执行迁移，已有库验证版本。"""
+        runner = self.migration_runner()
+        if auto_migrate:
+            runner.initialize(self.path)
+        else:
+            runner.verify(self.path)
 
     # ------------------------------------------------------------------ 命令
 
