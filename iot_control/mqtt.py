@@ -10,7 +10,6 @@ import paho.mqtt.client as mqtt
 
 from iot_control.repository import ControlRepository
 
-
 logger = logging.getLogger("xiaoyi.iot_control.mqtt")
 
 COMMAND_TOPIC = "iot/{device_id}/cmd"

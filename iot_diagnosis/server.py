@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
@@ -21,7 +21,6 @@ from iot_diagnosis.repository import DiagnosisRepository
 from iot_diagnosis.retrieval import search_fault_cases as retrieve_fault_cases
 from iot_diagnosis.retrieval import search_knowledge as retrieve_knowledge
 
-
 repository = DiagnosisRepository(
     os.getenv("DIAGNOSIS_DATABASE_PATH", "data/iot_diagnosis.db"),
     int(os.getenv("DIAGNOSIS_OFFLINE_AFTER_SECONDS", "120")),
@@ -38,6 +37,7 @@ async def service_lifespan(_server):
         ingestor.start()
     sync_interval = max(0.0, float(os.getenv("DIAGNOSIS_SYNC_RETRY_SECONDS", "30")))
     if sync_interval:
+
         async def retry_external_writes() -> None:
             while True:
                 await asyncio.sleep(sync_interval)
@@ -74,7 +74,9 @@ LogText = Annotated[str, Field(min_length=1, max_length=2000)]
 LogList = Annotated[list[LogText], Field(max_length=50)]
 
 
-def _record_diagnosis_failure(device_id: str, query: str, code: str, message: str) -> dict[str, str]:
+def _record_diagnosis_failure(
+    device_id: str, query: str, code: str, message: str
+) -> dict[str, str]:
     try:
         return repository.save_diagnosis_error(device_id, query, code, message)
     except Exception:
@@ -118,7 +120,9 @@ def get_diagnosis_trace(
 def get_device_status(device_id: DeviceId) -> dict[str, Any]:
     """查询设备在线状态、WiFi、RSSI、MQTT、温度、uptime 和最近上报时间。"""
     item = repository.get_device_status(device_id)
-    return success(item) if item else failure("DEVICE_NOT_FOUND", f"Device {device_id} does not exist")
+    return (
+        success(item) if item else failure("DEVICE_NOT_FOUND", f"Device {device_id} does not exist")
+    )
 
 
 @mcp.tool(annotations=read_only)
@@ -171,9 +175,7 @@ def list_knowledge_documents(
     offset: Annotated[int, Field(ge=0, le=100_000)] = 0,
 ) -> dict[str, Any]:
     """列出已摄取知识文档及分块数量，不返回大段正文。"""
-    return success(
-        repository.list_knowledge_documents(source, device_type, limit, offset)
-    )
+    return success(repository.list_knowledge_documents(source, device_type, limit, offset))
 
 
 @mcp.tool(annotations=read_only)
@@ -210,9 +212,7 @@ def list_diagnoses(
     offset: Annotated[int, Field(ge=0, le=100_000)] = 0,
 ) -> dict[str, Any]:
     """列出诊断历史摘要，可过滤设备、故障类型及成功或失败状态。"""
-    return success(
-        repository.list_diagnoses(device_id, fault_type, status, limit, offset)
-    )
+    return success(repository.list_diagnoses(device_id, fault_type, status, limit, offset))
 
 
 @mcp.tool(
@@ -307,9 +307,7 @@ def delete_knowledge_document(
 ) -> dict[str, Any]:
     """从 SQLite、MySQL 镜像和 Qdrant 向量索引中删除整个知识文档。"""
     try:
-        return success(
-            repository.delete_knowledge_document(source=source, document_id=document_id)
-        )
+        return success(repository.delete_knowledge_document(source=source, document_id=document_id))
     except ValueError as exc:
         return failure(str(exc), "知识文档参数无效")
     except Exception:

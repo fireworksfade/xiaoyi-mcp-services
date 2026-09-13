@@ -11,7 +11,6 @@ from iot_diagnosis.mqtt import MQTTIngestor
 from iot_diagnosis.remediation import build_case_payload, handle_remediation_event
 from iot_diagnosis.repository import DiagnosisRepository, iso
 
-
 DIAGNOSIS_RESULT = {
     "diagnosis_id": "DIA_20260912_DEADBEEF",
     "request_id": "req-1",
@@ -84,9 +83,7 @@ def test_build_case_payload_maps_diagnosis_fields() -> None:
 
 
 def test_build_case_payload_includes_parameters_and_falls_back() -> None:
-    event = _completed_event(
-        action="set_reporting_interval", parameters={"seconds": 10}, ack={}
-    )
+    event = _completed_event(action="set_reporting_interval", parameters={"seconds": 10}, ack={})
     trace = {**DIAGNOSIS_RESULT, "evidence": [], "cause": ""}
     case = build_case_payload(event, trace)
     assert "set_reporting_interval（seconds=10）" in case["solution"]
@@ -121,9 +118,9 @@ def test_event_without_recent_diagnosis_returns_none(repo: DiagnosisRepository) 
 
 def test_failed_or_invalid_events_are_ignored(repo: DiagnosisRepository) -> None:
     _seed_diagnosis(repo)
-    assert handle_remediation_event(
-        repo, "ESP32_06", _completed_event(verify_status="failed")
-    ) is None
+    assert (
+        handle_remediation_event(repo, "ESP32_06", _completed_event(verify_status="failed")) is None
+    )
     assert handle_remediation_event(repo, "ESP32_06", {"verify_status": "succeeded"}) is None
 
 
@@ -137,8 +134,7 @@ def test_mqtt_remediation_event_publishes_confirmation(
     monkeypatch.setattr(
         ingestor.client,
         "publish",
-        lambda topic, payload, qos=0: published.append((topic, payload))
-        or SimpleNamespace(rc=0),
+        lambda topic, payload, qos=0: published.append((topic, payload)) or SimpleNamespace(rc=0),
     )
     ingestor._on_message(
         None,

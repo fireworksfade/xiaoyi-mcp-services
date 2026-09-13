@@ -14,14 +14,10 @@ from typing import Any
 
 logger = logging.getLogger("xiaoyi.iot_diagnosis.remediation")
 
-CORRELATION_WINDOW_MINUTES = int(
-    os.getenv("DIAGNOSIS_REMEDIATION_CORRELATION_MINUTES", "60")
-)
+CORRELATION_WINDOW_MINUTES = int(os.getenv("DIAGNOSIS_REMEDIATION_CORRELATION_MINUTES", "60"))
 
 
-def build_case_payload(
-    event: dict[str, Any], diagnosis_result: dict[str, Any]
-) -> dict[str, Any]:
+def build_case_payload(event: dict[str, Any], diagnosis_result: dict[str, Any]) -> dict[str, Any]:
     """用诊断结果 + 实际执行的修复动作组装一条已验证故障案例。"""
     evidence = [str(item) for item in diagnosis_result.get("evidence", []) if str(item).strip()]
     query = str(diagnosis_result.get("query", "")).strip()
@@ -85,9 +81,7 @@ def handle_remediation_event(
     }
     diagnosis_result = _resolve_diagnosis(repository, event)
     if not diagnosis_result:
-        logger.info(
-            "No correlatable diagnosis for remediation %s on %s", command_id, device_id
-        )
+        logger.info("No correlatable diagnosis for remediation %s on %s", command_id, device_id)
         return None
     case = build_case_payload(event, diagnosis_result)
     written = repository.add_verified_fault_case(case)
@@ -97,7 +91,5 @@ def handle_remediation_event(
         "case_id": written["fault_id"],
         "diagnosis_id": diagnosis_result.get("diagnosis_id"),
     }
-    logger.info(
-        "Remediation %s archived as case %s", command_id, confirmation["case_id"]
-    )
+    logger.info("Remediation %s archived as case %s", command_id, confirmation["case_id"])
     return confirmation

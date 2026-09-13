@@ -5,8 +5,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from iot_diagnosis.repository import DiagnosisRepository
 from iot_diagnosis.llm import DiagnosisLLMClient, LLMClientError
+from iot_diagnosis.repository import DiagnosisRepository
 from iot_diagnosis.retrieval import search_knowledge
 from iot_diagnosis.router import RouteDecision, route_query
 
@@ -35,7 +35,9 @@ def _profile(text: str, state: dict[str, Any]) -> dict[str, Any]:
     temperature = state.get("temperature")
     explicitly_wifi = "wifi" in lowered or "rssi" in lowered or "无线" in lowered
     explicitly_sensor = "sensor" in lowered or "传感器" in lowered or "温度" in lowered
-    explicitly_device = "内存" in lowered or "heap" in lowered or "固件" in lowered or "重启" in lowered
+    explicitly_device = (
+        "内存" in lowered or "heap" in lowered or "固件" in lowered or "重启" in lowered
+    )
 
     if ("mqtt" in lowered or "broker" in lowered) and any(
         marker in lowered
@@ -89,8 +91,10 @@ def _profile(text: str, state: dict[str, Any]) -> dict[str, Any]:
             "cause": "网络拥塞、信号质量或链路抖动可能导致请求超时和连接不稳定",
             "solutions": ["测量往返延迟与丢包率", "检查 WiFi 信号和信道拥塞", "检查上游网络负载"],
         }
-    if "keep alive" in lowered or "keepalive" in lowered or (
-        "mqtt" in lowered and "timeout" in lowered
+    if (
+        "keep alive" in lowered
+        or "keepalive" in lowered
+        or ("mqtt" in lowered and "timeout" in lowered)
     ):
         return {
             "fault_type": "mqtt_connection",
@@ -240,9 +244,7 @@ def diagnose(
     llm_latency_ms = route.llm_latency_ms
     input_tokens = route.input_tokens
     output_tokens = route.output_tokens
-    llm_fallback_reason = (
-        None if direct_answer or llm_client.available else "LLM_NOT_CONFIGURED"
-    )
+    llm_fallback_reason = None if direct_answer or llm_client.available else "LLM_NOT_CONFIGURED"
     if route.need_retrieval and llm_client.available:
         try:
             llm_response = llm_client.diagnose(query, state, logs, retrieval["results"])
@@ -291,12 +293,16 @@ def diagnose(
     llm_score = min(max(float(profile.get("confidence", 0.82)), 0.0), 1.0)
     if not llm_client.available and profile["fault_type"] == "device_runtime":
         llm_score = 0.55
-    confidence = 1.0 if direct_answer else round(
-        0.35 * retrieval_score
-        + 0.25 * evidence_score
-        + 0.20 * case_similarity
-        + 0.20 * llm_score,
-        4,
+    confidence = (
+        1.0
+        if direct_answer
+        else round(
+            0.35 * retrieval_score
+            + 0.25 * evidence_score
+            + 0.20 * case_similarity
+            + 0.20 * llm_score,
+            4,
+        )
     )
     severity = profile.get("severity") or (
         "high" if not state["online"] or (state.get("temperature") or 0) >= 70 else "medium"

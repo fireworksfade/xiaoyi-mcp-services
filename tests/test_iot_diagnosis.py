@@ -37,9 +37,7 @@ from iot_diagnosis.router import route_query
         ("MQTT keep alive timeout", "MQTT Keep Alive Timeout"),
     ],
 )
-def test_fallback_diagnosis_profiles_cover_core_fault_scenarios(
-    evidence, fault_name
-) -> None:
+def test_fallback_diagnosis_profiles_cover_core_fault_scenarios(evidence, fault_name) -> None:
     profile = _profile(
         evidence,
         {"mqtt_status": "connected", "rssi": -47, "temperature": 26.3},
@@ -112,19 +110,13 @@ async def test_core_tools_are_discoverable_and_callable(tmp_path, monkeypatch) -
         status = await client.call_tool("get_device_status", {"device_id": "ESP32_05"})
         assert status.structured_content["data"]["rssi"] == -47
 
-        devices = await client.call_tool(
-            "list_devices", {"device_type": "ESP32", "online": True}
-        )
+        devices = await client.call_tool("list_devices", {"device_type": "ESP32", "online": True})
         assert devices.structured_content["data"]["total"] == 1
         assert devices.structured_content["data"]["items"][0]["device_id"] == "ESP32_05"
 
-        documents = await client.call_tool(
-            "list_knowledge_documents", {"source": "mqtt_docs"}
-        )
+        documents = await client.call_tool("list_knowledge_documents", {"source": "mqtt_docs"})
         assert documents.structured_content["data"]["total"] == 1
-        assert documents.structured_content["data"]["items"][0]["document_id"] == (
-            "MQTT_DOC_03"
-        )
+        assert documents.structured_content["data"]["items"][0]["document_id"] == ("MQTT_DOC_03")
 
         logs = await client.call_tool(
             "get_device_logs", {"device_id": "ESP32_05", "level": "ERROR"}
@@ -134,12 +126,11 @@ async def test_core_tools_are_discoverable_and_callable(tmp_path, monkeypatch) -
         failed_trace = repository.save_diagnosis_error(
             "MISSING", "why offline", "DEVICE_NOT_FOUND", "missing"
         )
-        diagnoses = await client.call_tool(
-            "list_diagnoses", {"status": "failed", "limit": 10}
-        )
+        diagnoses = await client.call_tool("list_diagnoses", {"status": "failed", "limit": 10})
         assert diagnoses.structured_content["data"]["total"] == 1
-        assert diagnoses.structured_content["data"]["items"][0]["diagnosis_id"] == (
-            failed_trace["diagnosis_id"]
+        assert (
+            diagnoses.structured_content["data"]["items"][0]["diagnosis_id"]
+            == (failed_trace["diagnosis_id"])
         )
 
 
@@ -164,9 +155,7 @@ def test_inventory_pagination_and_document_aggregation(tmp_path) -> None:
     )
 
     devices = repository.list_devices(device_type="ESP32", online=False, limit=1)
-    documents = repository.list_knowledge_documents(
-        source="mqtt_docs", limit=1, offset=1
-    )
+    documents = repository.list_knowledge_documents(source="mqtt_docs", limit=1, offset=1)
 
     assert devices["total"] == 1
     assert devices["items"][0]["device_id"] == "ESP32_06"
@@ -231,8 +220,9 @@ async def test_router_retrieval_diagnosis_and_traceability(tmp_path, monkeypatch
             "get_diagnosis_trace",
             {"diagnosis_id": realtime_data["diagnosis_id"]},
         )
-        assert realtime_trace.structured_content["data"]["result"]["answer"] == (
-            realtime_data["answer"]
+        assert (
+            realtime_trace.structured_content["data"]["result"]["answer"]
+            == (realtime_data["answer"])
         )
 
         mqtt_state = await client.call_tool(
@@ -376,9 +366,7 @@ def test_hash_embeddings_are_deterministic_and_collection_size_is_checked(monkey
     monkeypatch.setattr(
         QdrantVectorStore,
         "_request",
-        lambda *_args, **_kwargs: {
-            "result": {"config": {"params": {"vectors": {"size": 64}}}}
-        },
+        lambda *_args, **_kwargs: {"result": {"config": {"params": {"vectors": {"size": 64}}}}},
     )
     try:
         QdrantVectorStore("http://qdrant:6333", "knowledge", provider)
@@ -399,9 +387,7 @@ def test_remote_embedding_adds_query_instruction(monkeypatch) -> None:
             return False
 
         def read(self):
-            return json.dumps(
-                {"data": [{"index": 0, "embedding": [0.25, 0.75]}]}
-            ).encode()
+            return json.dumps({"data": [{"index": 0, "embedding": [0.25, 0.75]}]}).encode()
 
     def fake_urlopen(request, timeout):
         captured["payload"] = json.loads(request.data)
@@ -419,9 +405,7 @@ def test_remote_embedding_adds_query_instruction(monkeypatch) -> None:
     )
 
     assert provider.embed("MQTT timeout", is_query=True) == [0.25, 0.75]
-    assert captured["payload"]["input"] == [
-        "Instruct: Retrieve IoT passages\nQuery:MQTT timeout"
-    ]
+    assert captured["payload"]["input"] == ["Instruct: Retrieve IoT passages\nQuery:MQTT timeout"]
     assert captured["timeout"] == 7
 
 
@@ -730,14 +714,13 @@ def test_startup_snapshot_backfills_all_external_data_after_recovery(tmp_path) -
     assert retried["delivered"] == retried["processed"]
     assert repository.external_sync_status()["pending"] == 0
     assert "upsert_diagnosis" in mysql.delivered
-    assert repository.get_diagnosis_trace(trace["diagnosis_id"])["observability"][
-        "error"
-    ] == "UPSTREAM_UNAVAILABLE"
+    assert (
+        repository.get_diagnosis_trace(trace["diagnosis_id"])["observability"]["error"]
+        == "UPSTREAM_UNAVAILABLE"
+    )
 
 
-def test_retry_reconnects_client_that_was_missing_at_startup(
-    tmp_path, monkeypatch
-) -> None:
+def test_retry_reconnects_client_that_was_missing_at_startup(tmp_path, monkeypatch) -> None:
     repository = DiagnosisRepository(str(tmp_path / "diagnosis.db"))
     repository.save_diagnosis_error(
         "ESP32_05",
@@ -896,9 +879,7 @@ async def test_readiness_reports_retrieval_model_outage(tmp_path, monkeypatch) -
     monkeypatch.setenv("DIAGNOSIS_MYSQL_DSN", "")
     monkeypatch.setenv("DIAGNOSIS_QDRANT_URL", "")
     monkeypatch.setenv("DIAGNOSIS_EMBEDDING_PROVIDER", "openai_compatible")
-    monkeypatch.setenv(
-        "DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_URL", "http://models:9010/health"
-    )
+    monkeypatch.setenv("DIAGNOSIS_RETRIEVAL_MODEL_HEALTH_URL", "http://models:9010/health")
     monkeypatch.setattr(
         "iot_diagnosis.embeddings.urlopen",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(TimeoutError()),
@@ -947,7 +928,12 @@ def test_list_and_delete_fault_cases(tmp_path) -> None:
     }
     first = repository.add_verified_fault_case({**base, "verified_by": "auto-remediation:C1"})
     second = repository.add_verified_fault_case(
-        {**base, "fault_name": "传感器读数卡死", "fault_type": "sensor_anomaly", "verified_by": "admin"}
+        {
+            **base,
+            "fault_name": "传感器读数卡死",
+            "fault_type": "sensor_anomaly",
+            "verified_by": "admin",
+        }
     )
 
     listed = repository.list_fault_cases()

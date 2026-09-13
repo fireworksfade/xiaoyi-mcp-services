@@ -46,7 +46,7 @@ def main() -> None:
             continue
         outcome = repository.delete_fault_case(item["fault_id"])
         if outcome["deleted"]:
-            removed.append(f'{item["fault_id"]}({item["fault_name"]})')
+            removed.append(f"{item['fault_id']}({item['fault_name']})")
         results.append(outcome)
 
     print(

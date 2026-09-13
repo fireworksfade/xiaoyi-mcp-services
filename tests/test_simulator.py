@@ -103,9 +103,7 @@ def test_load_fleet_rejects_invalid_scenario(tmp_path) -> None:
 
 def test_load_fleet_rejects_hot_normal_baseline(tmp_path) -> None:
     config = {
-        "devices": [
-            {"device_id": "ESP32_01", "scenario": "normal", "temperature_base": 85.0}
-        ]
+        "devices": [{"device_id": "ESP32_01", "scenario": "normal", "temperature_base": 85.0}]
     }
     path = tmp_path / "fleet.json"
     path.write_text(json.dumps(config), encoding="utf-8")
@@ -132,9 +130,15 @@ def test_current_status_reports_profile_identity() -> None:
 
 
 def test_current_status_fault_scenarios() -> None:
-    weak = current_status(DeviceState("wifi_weak", 5.0), profile=_profile(scenario="wifi_weak"), rng=FakeRng())
-    stuck = current_status(DeviceState("sensor_error", 5.0), profile=_profile(scenario="sensor_error"), rng=FakeRng())
-    timeout = current_status(DeviceState("mqtt_timeout", 5.0), profile=_profile(scenario="mqtt_timeout"), rng=FakeRng())
+    weak = current_status(
+        DeviceState("wifi_weak", 5.0), profile=_profile(scenario="wifi_weak"), rng=FakeRng()
+    )
+    stuck = current_status(
+        DeviceState("sensor_error", 5.0), profile=_profile(scenario="sensor_error"), rng=FakeRng()
+    )
+    timeout = current_status(
+        DeviceState("mqtt_timeout", 5.0), profile=_profile(scenario="mqtt_timeout"), rng=FakeRng()
+    )
 
     assert weak["rssi"] == -82
     assert stuck["temperature"] == 78.0
@@ -186,16 +190,22 @@ def test_unstable_offline_episode_round_trip() -> None:
     assert entering[1][1]["wifi_status"] == "disconnected"
     assert state.offline is True
 
-    silent = build_cycle(state, profile, FakeRng(), elapsed=UNSTABLE_GRACE_SECONDS + 40, timestamp="t2")
+    silent = build_cycle(
+        state, profile, FakeRng(), elapsed=UNSTABLE_GRACE_SECONDS + 40, timestamp="t2"
+    )
     assert silent == [], "离线片段中设备应完全静默"
 
-    recovered = build_cycle(state, profile, FakeRng(), elapsed=UNSTABLE_GRACE_SECONDS + 80, timestamp="t3")
+    recovered = build_cycle(
+        state, profile, FakeRng(), elapsed=UNSTABLE_GRACE_SECONDS + 80, timestamp="t3"
+    )
     assert _suffixes(recovered) == ["logs", "status", "telemetry", "heartbeat"]
     assert recovered[0][1]["level"] == "INFO"
     assert recovered[1][1]["online"] is True
     assert state.offline is False
 
-    steady = build_cycle(state, profile, FakeRng(), elapsed=UNSTABLE_GRACE_SECONDS + 90, timestamp="t4")
+    steady = build_cycle(
+        state, profile, FakeRng(), elapsed=UNSTABLE_GRACE_SECONDS + 90, timestamp="t4"
+    )
     assert _suffixes(steady) == ["status", "telemetry", "heartbeat"], "恢复后回到常态上报"
 
 
@@ -220,7 +230,11 @@ def test_inject_fault_sets_flags_and_clears_with_normal() -> None:
 
     ack = handle_command(
         state,
-        {"command_id": "CMD_I1", "action": "inject_fault", "parameters": {"scenario": "mqtt_timeout"}},
+        {
+            "command_id": "CMD_I1",
+            "action": "inject_fault",
+            "parameters": {"scenario": "mqtt_timeout"},
+        },
     )
     assert ack["status"] == "applied"
     assert state.mqtt_timeout is True
@@ -228,7 +242,11 @@ def test_inject_fault_sets_flags_and_clears_with_normal() -> None:
 
     handle_command(
         state,
-        {"command_id": "CMD_I2", "action": "inject_fault", "parameters": {"scenario": "sensor_error"}},
+        {
+            "command_id": "CMD_I2",
+            "action": "inject_fault",
+            "parameters": {"scenario": "sensor_error"},
+        },
     )
     assert state.sensor_error is True
     assert current_status(state, profile=profile, rng=FakeRng())["temperature"] == 78.0
@@ -281,7 +299,11 @@ def test_inject_fault_memory_leak_publishes_oom_logs_and_restart_clears() -> Non
 
     ack = handle_command(
         state,
-        {"command_id": "CMD_I8", "action": "inject_fault", "parameters": {"scenario": "memory_leak"}},
+        {
+            "command_id": "CMD_I8",
+            "action": "inject_fault",
+            "parameters": {"scenario": "memory_leak"},
+        },
     )
     assert ack["status"] == "applied"
     assert state.memory_leak is True
@@ -305,7 +327,11 @@ def test_inject_fault_watchdog_resets_uptime_and_firmware_clears() -> None:
 
     ack = handle_command(
         state,
-        {"command_id": "CMD_I10", "action": "inject_fault", "parameters": {"scenario": "watchdog_reset"}},
+        {
+            "command_id": "CMD_I10",
+            "action": "inject_fault",
+            "parameters": {"scenario": "watchdog_reset"},
+        },
     )
     assert ack["status"] == "applied"
     assert state.watchdog_reset is True and state.uptime == 600

@@ -116,8 +116,7 @@ class ControlRepository:
             if column not in command_columns:
                 db.execute(f"ALTER TABLE device_command ADD COLUMN {column} {ddl}")
         proposal_columns = {
-            row[1]
-            for row in db.execute("PRAGMA table_info(remediation_proposal)").fetchall()
+            row[1] for row in db.execute("PRAGMA table_info(remediation_proposal)").fetchall()
         }
         if "diagnosis_id" not in proposal_columns:
             db.execute("ALTER TABLE remediation_proposal ADD COLUMN diagnosis_id TEXT")
@@ -262,7 +261,7 @@ class ControlRepository:
                 for device_id, watch in self._watches.items()
                 if watch["deadline"] <= now
             ]
-            for device_id, watch in due:
+            for device_id, _watch in due:
                 self._watches.pop(device_id, None)
             for device_id, watch in due:
                 verify_status = (
@@ -389,7 +388,7 @@ class ControlRepository:
                 params,
             ).fetchone()[0]
             rows = db.execute(
-                f"""SELECT * FROM remediation_proposal WHERE {' AND '.join(clauses)}
+                f"""SELECT * FROM remediation_proposal WHERE {" AND ".join(clauses)}
                 ORDER BY created_at DESC, proposal_id DESC LIMIT ? OFFSET ?""",
                 [*params, limit, offset],
             ).fetchall()

@@ -27,7 +27,15 @@ import paho.mqtt.client as mqtt
 
 logger = logging.getLogger(__name__)
 
-SCENARIOS = ("normal", "mqtt_timeout", "wifi_weak", "sensor_error", "unstable", "memory_leak", "watchdog_reset")
+SCENARIOS = (
+    "normal",
+    "mqtt_timeout",
+    "wifi_weak",
+    "sensor_error",
+    "unstable",
+    "memory_leak",
+    "watchdog_reset",
+)
 
 # unstable 场景参数：运行保护期后每个上报周期以该概率进入离线片段，
 # 片段时长在闭区间内随机，期间停止一切上报，模拟现场网络间歇性中断。
@@ -275,10 +283,7 @@ def build_cycle(
             else:
                 # 离线片段进行中：设备完全静默
                 return []
-        elif (
-            elapsed >= UNSTABLE_GRACE_SECONDS
-            and rng.random() < UNSTABLE_OFFLINE_PROBABILITY
-        ):
+        elif elapsed >= UNSTABLE_GRACE_SECONDS and rng.random() < UNSTABLE_OFFLINE_PROBABILITY:
             with state.lock:
                 state.offline = True
                 state.offline_until = elapsed + rng.uniform(
@@ -295,9 +300,7 @@ def build_cycle(
                     },
                 )
             )
-            messages.append(
-                ("status", current_status(state, timestamp, profile=profile, rng=rng))
-            )
+            messages.append(("status", current_status(state, timestamp, profile=profile, rng=rng)))
             return messages
 
     # 正常周期上报（健康设备与 unstable 恢复后/常态在线时共用）

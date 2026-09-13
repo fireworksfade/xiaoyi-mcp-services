@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import logging
 import os
 import re
@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Any
 
 from iot_diagnosis.external import ExternalStores
-
 
 logger = logging.getLogger("xiaoyi.iot_diagnosis.repository")
 
@@ -200,8 +199,7 @@ class DiagnosisRepository:
         return {
             "source": item["source"],
             "id": item["source_id"],
-            "document_id": item.get("document_id")
-            or item["source_id"].split("#", 1)[0],
+            "document_id": item.get("document_id") or item["source_id"].split("#", 1)[0],
             "chunk_index": int(item.get("chunk_index") or 0),
             "title": item["title"],
             "content": item["content"],
@@ -211,9 +209,7 @@ class DiagnosisRepository:
     def _qdrant_write_many(self, items: list[dict[str, Any]]) -> int:
         if not items or not self.external.is_configured("qdrant"):
             return 0
-        batch_size = max(
-            1, min(int(os.getenv("DIAGNOSIS_VECTOR_BATCH_SIZE", "32")), 100)
-        )
+        batch_size = max(1, min(int(os.getenv("DIAGNOSIS_VECTOR_BATCH_SIZE", "32")), 100))
         indexed = 0
         for offset in range(0, len(items), batch_size):
             batch = items[offset : offset + batch_size]
@@ -511,9 +507,7 @@ class DiagnosisRepository:
 
     def get_device_status(self, device_id: str) -> dict[str, Any] | None:
         with self._connect() as db:
-            device = db.execute(
-                "SELECT * FROM device WHERE device_id = ?", (device_id,)
-            ).fetchone()
+            device = db.execute("SELECT * FROM device WHERE device_id = ?", (device_id,)).fetchone()
             if not device:
                 return None
             status = db.execute(
@@ -627,18 +621,14 @@ class DiagnosisRepository:
                     str(
                         payload.get(
                             "wifi_status",
-                            payload.get(
-                                "wifi", previous and previous["wifi_status"] or "unknown"
-                            ),
+                            payload.get("wifi", previous and previous["wifi_status"] or "unknown"),
                         )
                     ),
                     payload.get("rssi", previous and previous["rssi"]),
                     str(
                         payload.get(
                             "mqtt_status",
-                            payload.get(
-                                "mqtt", previous and previous["mqtt_status"] or "unknown"
-                            ),
+                            payload.get("mqtt", previous and previous["mqtt_status"] or "unknown"),
                         )
                     ),
                     payload.get("temperature", previous and previous["temperature"]),
@@ -829,8 +819,10 @@ class DiagnosisRepository:
         indexed_count = self._qdrant_write_many(vector_items)
         mysql_saved = all(mysql_results)
         vector_indexed = vector_delete and indexed_count == len(vector_items)
-        sync_status = "complete" if mysql_saved and vector_indexed else (
-            "pending" if self.external_sync_status()["pending"] else "local_only"
+        sync_status = (
+            "complete"
+            if mysql_saved and vector_indexed
+            else ("pending" if self.external_sync_status()["pending"] else "local_only")
         )
         return {
             "source": source,
@@ -865,8 +857,10 @@ class DiagnosisRepository:
         delete_payload = {"source": source, "document_id": document_id}
         mysql_saved = self._external_write("mysql", "delete_document", delete_payload)
         vector_deleted = self._external_write("qdrant", "delete_document", delete_payload)
-        sync_status = "complete" if mysql_saved and vector_deleted else (
-            "pending" if self.external_sync_status()["pending"] else "local_only"
+        sync_status = (
+            "complete"
+            if mysql_saved and vector_deleted
+            else ("pending" if self.external_sync_status()["pending"] else "local_only")
         )
         return {
             "source": source,
@@ -1026,8 +1020,10 @@ class DiagnosisRepository:
         }
         mysql_saved = self._external_write("mysql", "upsert_fault_case", item)
         vector_indexed = self._external_write("qdrant", "upsert", self._case_document(item))
-        sync_status = "complete" if mysql_saved and vector_indexed else (
-            "pending" if self.external_sync_status()["pending"] else "local_only"
+        sync_status = (
+            "complete"
+            if mysql_saved and vector_indexed
+            else ("pending" if self.external_sync_status()["pending"] else "local_only")
         )
         return {
             "fault_id": fault_id,
@@ -1050,8 +1046,10 @@ class DiagnosisRepository:
         vector_payload = {"source": "fault_cases", "document_id": fault_id}
         mysql_saved = self._external_write("mysql", "delete_fault_case", mysql_payload)
         vector_deleted = self._external_write("qdrant", "delete_document", vector_payload)
-        sync_status = "complete" if mysql_saved and vector_deleted else (
-            "pending" if self.external_sync_status()["pending"] else "local_only"
+        sync_status = (
+            "complete"
+            if mysql_saved and vector_deleted
+            else ("pending" if self.external_sync_status()["pending"] else "local_only")
         )
         return {
             "fault_id": fault_id,
@@ -1232,9 +1230,7 @@ class DiagnosisRepository:
             "offset": offset,
         }
 
-    def vector_search(
-        self, query: str, sources: list[str], top_k: int
-    ) -> list[dict[str, Any]]:
+    def vector_search(self, query: str, sources: list[str], top_k: int) -> list[dict[str, Any]]:
         target = self.external.qdrant
         if not target:
             return []

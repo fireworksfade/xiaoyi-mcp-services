@@ -12,13 +12,8 @@ from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-
-EMBEDDING_MODEL = os.getenv(
-    "EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B"
-)
-RERANKER_MODEL = os.getenv(
-    "RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B"
-)
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
 MAX_LENGTH = int(os.getenv("MODEL_MAX_LENGTH", "2048"))
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "8"))
 RERANKER_BATCH_SIZE = int(os.getenv("RERANKER_BATCH_SIZE", "4"))
@@ -115,26 +110,20 @@ async def lifespan(_: FastAPI):
         tokenizer_kwargs={"padding_side": "left"},
     )
     models["embedding"].max_seq_length = MAX_LENGTH
-    reranker_tokenizer = AutoTokenizer.from_pretrained(
-        RERANKER_MODEL, padding_side="left"
+    reranker_tokenizer = AutoTokenizer.from_pretrained(RERANKER_MODEL, padding_side="left")
+    reranker_model = (
+        AutoModelForCausalLM.from_pretrained(RERANKER_MODEL, dtype=dtype).to(device).eval()
     )
-    reranker_model = AutoModelForCausalLM.from_pretrained(
-        RERANKER_MODEL, dtype=dtype
-    ).to(device).eval()
     prefix = (
-        '<|im_start|>system\nJudge whether the Document meets the requirements based on '
+        "<|im_start|>system\nJudge whether the Document meets the requirements based on "
         'the Query and the Instruct provided. Note that the answer can only be "yes" or '
         '"no".<|im_end|>\n<|im_start|>user\n'
     )
     suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
     models["reranker"] = reranker_model
     models["reranker_tokenizer"] = reranker_tokenizer
-    models["reranker_prefix"] = reranker_tokenizer.encode(
-        prefix, add_special_tokens=False
-    )
-    models["reranker_suffix"] = reranker_tokenizer.encode(
-        suffix, add_special_tokens=False
-    )
+    models["reranker_prefix"] = reranker_tokenizer.encode(prefix, add_special_tokens=False)
+    models["reranker_suffix"] = reranker_tokenizer.encode(suffix, add_special_tokens=False)
     models["reranker_false_id"] = reranker_tokenizer.convert_tokens_to_ids("no")
     models["reranker_true_id"] = reranker_tokenizer.convert_tokens_to_ids("yes")
     models["device"] = device
@@ -192,10 +181,7 @@ def rerank(request: RerankRequest) -> dict[str, Any]:
     prefix_tokens = models["reranker_prefix"]
     suffix_tokens = models["reranker_suffix"]
     formatted = [
-        (
-            f"<Instruct>: {RERANKER_INSTRUCTION}\n"
-            f"<Query>: {request.query}\n<Document>: {document}"
-        )
+        (f"<Instruct>: {RERANKER_INSTRUCTION}\n<Query>: {request.query}\n<Document>: {document}")
         for document in request.documents
     ]
     tokenized = tokenizer(
@@ -211,13 +197,11 @@ def rerank(request: RerankRequest) -> dict[str, Any]:
             prefix_tokens + item + suffix_tokens
             for item in tokenized[offset : offset + RERANKER_BATCH_SIZE]
         ]
-        inputs = tokenizer.pad(
-            {"input_ids": input_ids}, padding=True, return_tensors="pt"
-        ).to(models["device"])
+        inputs = tokenizer.pad({"input_ids": input_ids}, padding=True, return_tensors="pt").to(
+            models["device"]
+        )
         with torch.no_grad():
-            logits = models["reranker"](
-                **inputs, logits_to_keep=1
-            ).logits[:, -1, :]
+            logits = models["reranker"](**inputs, logits_to_keep=1).logits[:, -1, :]
         yes_no_logits = torch.stack(
             [
                 logits[:, models["reranker_false_id"]],
@@ -226,16 +210,10 @@ def rerank(request: RerankRequest) -> dict[str, Any]:
             dim=1,
         )
         scores.extend(
-            torch.nn.functional.softmax(yes_no_logits, dim=1)[:, 1]
-            .float()
-            .cpu()
-            .tolist()
+            torch.nn.functional.softmax(yes_no_logits, dim=1)[:, 1].float().cpu().tolist()
         )
     ranked = sorted(
-        (
-            {"index": index, "score": float(score)}
-            for index, score in enumerate(scores)
-        ),
+        ({"index": index, "score": float(score)} for index, score in enumerate(scores)),
         key=lambda item: item["score"],
         reverse=True,
     )

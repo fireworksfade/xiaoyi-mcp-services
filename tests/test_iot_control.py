@@ -31,22 +31,12 @@ def test_action_catalog_risk_levels() -> None:
 
 
 def test_parameter_validation_rejects_missing_and_out_of_range() -> None:
+    assert actions.validate_parameters("set_reporting_interval", {}) == "MISSING_PARAMETER"
     assert (
-        actions.validate_parameters("set_reporting_interval", {})
-        == "MISSING_PARAMETER"
+        actions.validate_parameters("set_reporting_interval", {"seconds": 0}) == "INVALID_PARAMETER"
     )
-    assert (
-        actions.validate_parameters("set_reporting_interval", {"seconds": 0})
-        == "INVALID_PARAMETER"
-    )
-    assert (
-        actions.validate_parameters("set_reporting_interval", {"seconds": 30})
-        is None
-    )
-    assert (
-        actions.validate_parameters("set_reporting_interval", {"foo": 1})
-        == "UNKNOWN_PARAMETER"
-    )
+    assert actions.validate_parameters("set_reporting_interval", {"seconds": 30}) is None
+    assert actions.validate_parameters("set_reporting_interval", {"foo": 1}) == "UNKNOWN_PARAMETER"
     assert actions.validate_parameters("reconnect_mqtt", None) is None
 
 
@@ -130,9 +120,7 @@ def test_proposal_decision_optimistic_lock(repo: ControlRepository) -> None:
     assert proposal["status"] == "pending" and proposal["version"] == 1
 
     with pytest.raises(ValueError):
-        repo.decide_proposal(
-            proposal["proposal_id"], "approved", "admin", 99, actions.risk_level
-        )
+        repo.decide_proposal(proposal["proposal_id"], "approved", "admin", 99, actions.risk_level)
 
     decided, command = repo.decide_proposal(
         proposal["proposal_id"], "approved", "admin", 1, actions.risk_level
@@ -143,9 +131,7 @@ def test_proposal_decision_optimistic_lock(repo: ControlRepository) -> None:
     assert command is not None and command["risk_level"] == actions.HIGH_RISK
 
     with pytest.raises(ValueError):
-        repo.decide_proposal(
-            proposal["proposal_id"], "rejected", "admin", 1, actions.risk_level
-        )
+        repo.decide_proposal(proposal["proposal_id"], "rejected", "admin", 1, actions.risk_level)
 
 
 def test_proposal_expiry_on_read(repo: ControlRepository) -> None:
@@ -304,9 +290,7 @@ def test_publish_completed_events_uses_device_topic(
     repo.record_status_sample("ESP32_07", True)
     finalized = repo.finalize_watches(utc_now() + timedelta(seconds=120))
     channel = FakeChannel()
-    published = remediation_events.publish_completed_events(
-        channel, repo, finalized
-    )
+    published = remediation_events.publish_completed_events(channel, repo, finalized)
     assert published == [command["command_id"]]
     assert len(channel.published) == 1
     topic, payload = channel.published[0]

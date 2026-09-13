@@ -11,7 +11,6 @@ from urllib.request import Request, urlopen
 
 from iot_diagnosis.embeddings import EmbeddingProvider, embedding_provider_from_env
 
-
 logger = logging.getLogger("xiaoyi.iot_diagnosis.external")
 
 
@@ -101,9 +100,7 @@ class MySQLMirror:
                 cursor.execute("SHOW COLUMNS FROM diagnosis_record")
                 diagnosis_columns = {row[0] for row in cursor.fetchall()}
                 if "result_json" not in diagnosis_columns:
-                    cursor.execute(
-                        "ALTER TABLE diagnosis_record ADD COLUMN result_json JSON NULL"
-                    )
+                    cursor.execute("ALTER TABLE diagnosis_record ADD COLUMN result_json JSON NULL")
 
     def upsert_device_status(self, device: dict[str, Any], status: dict[str, Any]) -> None:
         with self._connect() as db, db.cursor() as cursor:
@@ -112,8 +109,11 @@ class MySQLMirror:
                 VALUES (%s, %s, %s, %s, %s) ON DUPLICATE KEY UPDATE
                 device_type=VALUES(device_type), name=VALUES(name), firmware_version=VALUES(firmware_version)""",
                 (
-                    device["device_id"], device["device_type"], device["name"],
-                    device.get("firmware_version"), device.get("created_at") or status["timestamp"],
+                    device["device_id"],
+                    device["device_type"],
+                    device["name"],
+                    device.get("firmware_version"),
+                    device.get("created_at") or status["timestamp"],
                 ),
             )
             cursor.execute(
@@ -124,8 +124,14 @@ class MySQLMirror:
                 rssi=VALUES(rssi), mqtt_status=VALUES(mqtt_status), temperature=VALUES(temperature),
                 uptime=VALUES(uptime)""",
                 (
-                    status["device_id"], status["online"], status["wifi_status"], status.get("rssi"),
-                    status["mqtt_status"], status.get("temperature"), status.get("uptime"), status["timestamp"],
+                    status["device_id"],
+                    status["online"],
+                    status["wifi_status"],
+                    status.get("rssi"),
+                    status["mqtt_status"],
+                    status.get("temperature"),
+                    status.get("uptime"),
+                    status["timestamp"],
                 ),
             )
 
@@ -143,8 +149,11 @@ class MySQLMirror:
                     firmware_version=VALUES(firmware_version)""",
                     [
                         (
-                            item["device_id"], item["device_type"], item["name"],
-                            item.get("firmware_version"), item["created_at"],
+                            item["device_id"],
+                            item["device_type"],
+                            item["name"],
+                            item.get("firmware_version"),
+                            item["created_at"],
                         )
                         for item in devices
                     ],
@@ -159,19 +168,31 @@ class MySQLMirror:
                     temperature=VALUES(temperature), uptime=VALUES(uptime)""",
                     [
                         (
-                            item["device_id"], item["online"], item["wifi_status"], item.get("rssi"),
-                            item["mqtt_status"], item.get("temperature"), item.get("uptime"),
+                            item["device_id"],
+                            item["online"],
+                            item["wifi_status"],
+                            item.get("rssi"),
+                            item["mqtt_status"],
+                            item.get("temperature"),
+                            item.get("uptime"),
                             item["timestamp"],
                         )
                         for item in statuses
                     ],
                 )
+
     def add_log(self, item: dict[str, Any]) -> None:
         with self._connect() as db, db.cursor() as cursor:
             cursor.execute(
                 """INSERT IGNORE INTO device_log(device_id, level, module, message, timestamp)
                 VALUES (%s, %s, %s, %s, %s)""",
-                (item["device_id"], item["level"], item["module"], item["message"], item["timestamp"]),
+                (
+                    item["device_id"],
+                    item["level"],
+                    item["module"],
+                    item["message"],
+                    item["timestamp"],
+                ),
             )
 
     def add_logs(self, items: list[dict[str, Any]]) -> None:
@@ -182,7 +203,13 @@ class MySQLMirror:
                 """INSERT IGNORE INTO device_log(device_id, level, module, message, timestamp)
                 VALUES (%s, %s, %s, %s, %s)""",
                 [
-                    (item["device_id"], item["level"], item["module"], item["message"], item["timestamp"])
+                    (
+                        item["device_id"],
+                        item["level"],
+                        item["module"],
+                        item["message"],
+                        item["timestamp"],
+                    )
                     for item in items
                 ],
             )
@@ -196,8 +223,13 @@ class MySQLMirror:
                 title=VALUES(title), content=VALUES(content), device_type=VALUES(device_type),
                 document_id=VALUES(document_id), chunk_index=VALUES(chunk_index)""",
                 (
-                    item["source"], item["source_id"], item["title"], item["content"],
-                    item.get("device_type"), item["created_at"], item.get("document_id"),
+                    item["source"],
+                    item["source_id"],
+                    item["title"],
+                    item["content"],
+                    item.get("device_type"),
+                    item["created_at"],
+                    item.get("document_id"),
                     int(item.get("chunk_index") or 0),
                 ),
             )
@@ -235,10 +267,20 @@ class MySQLMirror:
                 logs_json=VALUES(logs_json), cause=VALUES(cause), solution=VALUES(solution),
                 verified=VALUES(verified), verified_by=VALUES(verified_by), updated_at=VALUES(updated_at)""",
                 (
-                    item["fault_id"], item.get("device_id"), item["device_type"], item["fault_type"],
-                    item["fault_name"], json.dumps(item["symptoms"], ensure_ascii=False),
-                    json.dumps(item["logs"], ensure_ascii=False), item["cause"], item["solution"],
-                    item["verified"], item["verified_by"], item["source"], item["created_at"], item["updated_at"],
+                    item["fault_id"],
+                    item.get("device_id"),
+                    item["device_type"],
+                    item["fault_type"],
+                    item["fault_name"],
+                    json.dumps(item["symptoms"], ensure_ascii=False),
+                    json.dumps(item["logs"], ensure_ascii=False),
+                    item["cause"],
+                    item["solution"],
+                    item["verified"],
+                    item["verified_by"],
+                    item["source"],
+                    item["created_at"],
+                    item["updated_at"],
                 ),
             )
 
@@ -258,9 +300,15 @@ class MySQLMirror:
                 ON DUPLICATE KEY UPDATE observability_json=VALUES(observability_json),
                 result_json=VALUES(result_json)""",
                 (
-                    item["diagnosis_id"], item["request_id"], item["device_id"], item["query"],
-                    item["fault_type"], item["fault_name"], item["cause"],
-                    json.dumps(item["solutions"], ensure_ascii=False), item["confidence"],
+                    item["diagnosis_id"],
+                    item["request_id"],
+                    item["device_id"],
+                    item["query"],
+                    item["fault_type"],
+                    item["fault_name"],
+                    item["cause"],
+                    json.dumps(item["solutions"], ensure_ascii=False),
+                    item["confidence"],
                     item["route"]["router"],
                     json.dumps(item["route"]["selected_sources"], ensure_ascii=False),
                     json.dumps(
@@ -268,13 +316,15 @@ class MySQLMirror:
                         ensure_ascii=False,
                     ),
                     json.dumps(item["observability"], ensure_ascii=False),
-                    json.dumps(result, ensure_ascii=False), item["created_at"],
+                    json.dumps(result, ensure_ascii=False),
+                    item["created_at"],
                 ),
             )
 
     def upsert_diagnoses(self, items: list[dict[str, Any]]) -> None:
         if not items:
             return
+
         def result_snapshot(item: dict[str, Any]) -> dict[str, Any]:
             return item.get("result") or {
                 key: value
@@ -293,14 +343,21 @@ class MySQLMirror:
                 result_json=VALUES(result_json)""",
                 [
                     (
-                        item["diagnosis_id"], item["request_id"], item["device_id"], item["query"],
-                        item["fault_type"], item["fault_name"], item["cause"],
-                        json.dumps(item["solutions"], ensure_ascii=False), item["confidence"],
+                        item["diagnosis_id"],
+                        item["request_id"],
+                        item["device_id"],
+                        item["query"],
+                        item["fault_type"],
+                        item["fault_name"],
+                        item["cause"],
+                        json.dumps(item["solutions"], ensure_ascii=False),
+                        item["confidence"],
                         item["route"]["router"],
                         json.dumps(item["route"]["selected_sources"], ensure_ascii=False),
                         json.dumps(item.get("trace_contexts", item["sources"]), ensure_ascii=False),
                         json.dumps(item["observability"], ensure_ascii=False),
-                        json.dumps(result_snapshot(item), ensure_ascii=False), item["created_at"],
+                        json.dumps(result_snapshot(item), ensure_ascii=False),
+                        item["created_at"],
                     )
                     for item in items
                 ],
@@ -408,9 +465,7 @@ class QdrantVectorStore:
         }
         if sources:
             payload["filter"] = {"must": [{"key": "source", "match": {"any": sources}}]}
-        response = self._request(
-            "POST", f"/collections/{self.collection}/points/query", payload
-        )
+        response = self._request("POST", f"/collections/{self.collection}/points/query", payload)
         points = (response.get("result") or {}).get("points") or []
         return [
             {**dict(point.get("payload") or {}), "score": float(point.get("score") or 0.0)}
@@ -429,9 +484,7 @@ class ExternalStores:
         self.errors: dict[str, str] = {}
         self.mysql_dsn = os.getenv("DIAGNOSIS_MYSQL_DSN", "").strip()
         self.qdrant_url = os.getenv("DIAGNOSIS_QDRANT_URL", "").strip()
-        self.qdrant_collection = os.getenv(
-            "DIAGNOSIS_QDRANT_COLLECTION", "iot_diagnosis_knowledge"
-        )
+        self.qdrant_collection = os.getenv("DIAGNOSIS_QDRANT_COLLECTION", "iot_diagnosis_knowledge")
         self.configured = {
             "mysql": bool(self.mysql_dsn),
             "qdrant": bool(self.qdrant_url),

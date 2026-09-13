@@ -129,13 +129,9 @@ async def run(url: str, timeout: float, token: str) -> None:
             )
         )
         diagnoses = structured(
-            await server.call_tool(
-                "list_diagnoses", {"device_id": "ESP32_05", "limit": 10}
-            )
+            await server.call_tool("list_diagnoses", {"device_id": "ESP32_05", "limit": 10})
         )
-        documents = structured(
-            await server.call_tool("list_knowledge_documents", {"limit": 20})
-        )
+        documents = structured(await server.call_tool("list_knowledge_documents", {"limit": 20}))
 
     assert devices["ok"] is True and devices["data"]["items"]
     assert status["ok"] is True and status["data"]["device_id"] == "ESP32_05"

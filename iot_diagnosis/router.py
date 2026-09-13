@@ -6,7 +6,6 @@ from typing import Any
 
 from iot_diagnosis.llm import DiagnosisLLMClient, LLMClientError
 
-
 ALLOWED_SOURCES = {
     "fault_cases",
     "mqtt_docs",
@@ -37,14 +36,13 @@ SOURCE_PROTOTYPES = {
         "电源管理 power management 睡眠 sleep 唤醒 wake 事件 event 日志 log GPIO"
     ),
     "fault_cases": (
-        "已验证的故障案例 历史维修记录 根因分析 解决方案 verified case "
-        "类似故障 曾经发生"
+        "已验证的故障案例 历史维修记录 根因分析 解决方案 verified case 类似故障 曾经发生"
     ),
 }
 
 
 def _cosine(left: list[float], right: list[float]) -> float:
-    paired = zip(left, right)
+    paired = zip(left, right, strict=True)
     dot = sum(a * b for a, b in paired)
     norm_left = math.sqrt(sum(value * value for value in left))
     norm_right = math.sqrt(sum(value * value for value in right))
@@ -61,16 +59,13 @@ def semantic_sources(
     if embedding_provider is None:
         return []
     try:
-        cache = _prototype_cache.setdefault(
-            getattr(embedding_provider, "name", "default"), {}
-        )
+        cache = _prototype_cache.setdefault(getattr(embedding_provider, "name", "default"), {})
         provider_dims = getattr(embedding_provider, "dimensions", None)
         if cache.get("dims") != provider_dims or len(cache.get("vectors", {})) < len(
             SOURCE_PROTOTYPES
         ):
             cache["vectors"] = {
-                source: embedding_provider.embed(text)
-                for source, text in SOURCE_PROTOTYPES.items()
+                source: embedding_provider.embed(text) for source, text in SOURCE_PROTOTYPES.items()
             }
             cache["dims"] = provider_dims
         query_vector = embedding_provider.embed(query, is_query=True)

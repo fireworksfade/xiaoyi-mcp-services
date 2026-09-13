@@ -6,9 +6,8 @@ import os
 
 import paho.mqtt.client as mqtt
 
-from iot_diagnosis.repository import DiagnosisRepository
 from iot_diagnosis.remediation import handle_remediation_event
-
+from iot_diagnosis.repository import DiagnosisRepository
 
 logger = logging.getLogger("xiaoyi.iot_diagnosis.mqtt")
 
@@ -65,9 +64,7 @@ class MQTTIngestor:
             elif kind == "remediation":
                 # 修复完成事件：沉淀案例并回发确认，供 Control 关联 case_id
                 if isinstance(payload, dict):
-                    confirmation = handle_remediation_event(
-                        self.repository, device_id, payload
-                    )
+                    confirmation = handle_remediation_event(self.repository, device_id, payload)
                     if confirmation:
                         self.client.publish(
                             f"iot/{device_id}/remediation_case",

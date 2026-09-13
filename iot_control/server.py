@@ -13,12 +13,10 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from common.results import failure, success
-from iot_control import actions
-from iot_control import remediation_events
+from iot_control import actions, remediation_events
 from iot_control.auth import auth_configuration
 from iot_control.mqtt import ControlMQTT
 from iot_control.repository import ControlRepository
-
 
 logger = logging.getLogger("xiaoyi.iot_control.server")
 
@@ -51,9 +49,7 @@ async def service_lifespan(_server):
                 # 修复完成事件交给诊断服务消费（案例沉淀归诊断服务所有）
                 if finalized and channel is not None:
                     try:
-                        remediation_events.publish_completed_events(
-                            channel, repository, finalized
-                        )
+                        remediation_events.publish_completed_events(channel, repository, finalized)
                     except Exception:
                         logger.exception("Remediation event publishing failed")
 
@@ -209,9 +205,7 @@ def get_action_result(
     proposal = repository.get_proposal(proposal_id)
     if proposal is None:
         return failure("PROPOSAL_NOT_FOUND", f"Proposal {proposal_id} does not exist")
-    command = (
-        repository.get_command(proposal["command_id"]) if proposal["command_id"] else None
-    )
+    command = repository.get_command(proposal["command_id"]) if proposal["command_id"] else None
     return success({"proposal": proposal, "command": command})
 
 

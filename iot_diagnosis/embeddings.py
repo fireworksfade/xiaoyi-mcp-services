@@ -16,9 +16,7 @@ class EmbeddingProvider(Protocol):
 
     def embed(self, text: str, *, is_query: bool = False) -> list[float]: ...
 
-    def embed_many(
-        self, texts: list[str], *, is_query: bool = False
-    ) -> list[list[float]]: ...
+    def embed_many(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]: ...
 
 
 class HashEmbeddingProvider:
@@ -40,9 +38,7 @@ class HashEmbeddingProvider:
         norm = math.sqrt(sum(value * value for value in vector))
         return [value / norm for value in vector] if norm else vector
 
-    def embed_many(
-        self, texts: list[str], *, is_query: bool = False
-    ) -> list[list[float]]:
+    def embed_many(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
         return [self.embed(text, is_query=is_query) for text in texts]
 
 
@@ -73,9 +69,7 @@ class OpenAICompatibleEmbeddingProvider:
     def embed(self, text: str, *, is_query: bool = False) -> list[float]:
         return self.embed_many([text], is_query=is_query)[0]
 
-    def embed_many(
-        self, texts: list[str], *, is_query: bool = False
-    ) -> list[list[float]]:
+    def embed_many(self, texts: list[str], *, is_query: bool = False) -> list[list[float]]:
         if not texts:
             return []
         embedding_input = [
@@ -103,11 +97,16 @@ class OpenAICompatibleEmbeddingProvider:
             by_index = {int(row["index"]): row["embedding"] for row in rows}
             if set(by_index) != set(range(len(texts))) or len(rows) != len(texts):
                 raise ValueError("invalid embedding response indices")
-            vectors = [
-                [float(value) for value in by_index[index]]
-                for index in range(len(texts))
-            ]
-        except (HTTPError, URLError, TimeoutError, ValueError, KeyError, IndexError, TypeError) as exc:
+            vectors = [[float(value) for value in by_index[index]] for index in range(len(texts))]
+        except (
+            HTTPError,
+            URLError,
+            TimeoutError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
             raise RuntimeError("EMBEDDING_REQUEST_FAILED") from exc
         if any(len(vector) != self.dimensions for vector in vectors):
             raise RuntimeError("EMBEDDING_DIMENSIONS_MISMATCH")

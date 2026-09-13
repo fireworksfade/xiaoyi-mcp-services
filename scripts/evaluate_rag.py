@@ -14,7 +14,9 @@ from iot_diagnosis.router import route_query
 
 
 def load_jsonl(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -55,7 +57,9 @@ def evaluate(
         expected_sources = set(case["expected_sources"])
         actual_sources = set(route.sources)
         source_scores.append(
-            len(expected_sources & actual_sources) / len(expected_sources) if expected_sources else 1.0
+            len(expected_sources & actual_sources) / len(expected_sources)
+            if expected_sources
+            else 1.0
         )
 
         relevant_ids = set(case.get("relevant_ids") or [])
@@ -96,7 +100,9 @@ def evaluate(
             token_usage["input"] += result["observability"]["input_tokens"]
             token_usage["output"] += result["observability"]["output_tokens"]
 
-    mean = lambda values: round(statistics.fmean(values), 4) if values else 0.0
+    def mean(values: list[float]) -> float:
+        return round(statistics.fmean(values), 4) if values else 0.0
+
     return {
         "profile": profile,
         "cases": len(dataset),

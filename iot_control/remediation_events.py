@@ -35,9 +35,7 @@ def completed_event(command: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def publish_completed_events(
-    channel, repository, finalized: list[dict[str, Any]]
-) -> list[str]:
+def publish_completed_events(channel, repository, finalized: list[dict[str, Any]]) -> list[str]:
     """把本轮收敛的命令逐条发布为完成事件，返回已发布的 command_id。"""
     published: list[str] = []
     for item in finalized:

@@ -8,7 +8,6 @@ from pathlib import Path
 from iot_diagnosis.ingestion import ingest_text
 from iot_diagnosis.repository import DiagnosisRepository
 
-
 DOCUMENTS = (
     (
         "esp_mqtt_error_diagnosis.md",
