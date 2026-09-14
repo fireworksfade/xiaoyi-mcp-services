@@ -45,6 +45,18 @@ def database_path(service: str) -> str:
     return os.getenv(env_name, default)
 
 
+def _normalize_argv(argv: list[str]) -> list[str]:
+    """Allow ``--service`` before or after the migration subcommand."""
+    try:
+        service_index = argv.index("--service")
+    except ValueError:
+        return argv
+    if service_index == 0 or service_index + 1 >= len(argv):
+        return argv
+    service_args = argv[service_index : service_index + 2]
+    return service_args + argv[:service_index] + argv[service_index + 2 :]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m scripts.migrate")
     parser.add_argument("--service", required=True, choices=["diagnosis", "control"])
@@ -54,7 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     upgrade_parser.add_argument("--dry-run", action="store_true", help="只显示将应用的迁移")
     backup_parser = subparsers.add_parser("backup", help="SQLite 官方 backup API 备份")
     backup_parser.add_argument("--target", required=True)
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(_normalize_argv(raw_argv))
 
     runner = get_runner(args.service)
     try:

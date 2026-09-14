@@ -22,6 +22,7 @@ import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import paho.mqtt.client as mqtt
 
@@ -208,7 +209,7 @@ def current_status(
     rng: random.Random | None = None,
 ) -> dict:
     """根据设备状态与画像生成一帧 status/telemetry 载荷。"""
-    rng = rng or random
+    randomizer: Any = rng or random
     timestamp = timestamp or datetime.now(timezone.utc).isoformat()
     snapshot = state.snapshot()
 
@@ -217,18 +218,18 @@ def current_status(
         temperature = 78.0
     else:
         base = profile.temperature_base if profile else 27.0
-        temperature = round(base + rng.uniform(-1.0, 1.0), 2)
+        temperature = round(base + randomizer.uniform(-1.0, 1.0), 2)
 
     if snapshot["wifi_weak"]:
         rssi = -82
     elif snapshot["offline"]:
-        rssi = rng.randint(-92, -85)
+        rssi = randomizer.randint(-92, -85)
     elif snapshot["unstable"]:
         # 信号在诊断阈值 -75 附近波动，制造间歇性弱信号
-        rssi = rng.randint(-78, -70)
+        rssi = randomizer.randint(-78, -70)
     else:
         base = profile.rssi_base if profile else -50
-        rssi = int(base) + rng.randint(-4, 4)
+        rssi = int(base) + randomizer.randint(-4, 4)
 
     online = not snapshot["offline"]
     status = {

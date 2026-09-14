@@ -6,12 +6,14 @@
 
 import sqlite3
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from common.migrations import (
     Migration,
     MigrationError,
+    MySQLMigrationRunner,
     SQLiteMigrationRunner,
     load_migrations_from_dir,
 )
@@ -144,6 +146,20 @@ def test_sequence_must_be_contiguous() -> None:
     assert excinfo.value.code == "MIGRATION_SEQUENCE_INVALID"
 
 
+def test_mysql_runner_reads_rows_from_cursor() -> None:
+    """PyMySQL execute 返回行数，结果必须从 cursor.fetchall 读取。"""
+    cursor = MagicMock()
+    cursor.execute.return_value = 0
+    cursor.fetchall.return_value = []
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.cursor.return_value = cursor
+
+    MySQLMigrationRunner([], service="test").ensure(lambda: connection)
+
+    cursor.fetchall.assert_called_once_with()
+
+
 def test_repository_construction_uses_runner(tmp_path: Path) -> None:
     """Repository 构造（auto_migrate 默认）等价于迁移到 head。"""
     repository = DiagnosisRepository(str(tmp_path / "diag.db"))
@@ -200,5 +216,9 @@ def test_migrate_cli(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
         assert migrate_cli.main(["--service", "diagnosis", "status"]) == 0
         final = capsys.readouterr().out
         assert '"pending": []' in final or '"pending":[]' in final.replace(" ", "")
+
+        assert migrate_cli.main(["upgrade", "--service", "diagnosis"]) == 0
+        command_first = capsys.readouterr().out
+        assert '"applied": []' in command_first
     finally:
         del os.environ["DIAGNOSIS_DATABASE_PATH"]

@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from iot_diagnosis.llm import DiagnosisLLMClient, LLMClientError
 from iot_diagnosis.repository import DiagnosisRepository
@@ -283,14 +283,15 @@ def diagnose(
         )
     evidence.extend(logs[:5])
 
-    scores = [float(item["score"]) for item in retrieval["results"]]
+    retrieval_results = cast(list[dict[str, Any]], retrieval["results"])
+    scores = [float(item["score"]) for item in retrieval_results]
     retrieval_score = max(scores, default=0.8 if not route.need_retrieval else 0.0)
     case_similarity = max(
-        (float(item["score"]) for item in retrieval["results"] if item["source"] == "fault_cases"),
+        (float(item["score"]) for item in retrieval_results if item["source"] == "fault_cases"),
         default=0.0,
     )
     evidence_score = min(1.0, len(evidence) / 5)
-    llm_score = min(max(float(profile.get("confidence", 0.82)), 0.0), 1.0)
+    llm_score = min(max(float(cast(Any, profile.get("confidence", 0.82))), 0.0), 1.0)
     if not llm_client.available and profile["fault_type"] == "device_runtime":
         llm_score = 0.55
     confidence = (
@@ -310,8 +311,9 @@ def diagnose(
     elapsed = round((time.perf_counter() - started) * 1000, 3)
     sources = [
         {"source_type": item["source"], "source_id": item["id"], "score": item["score"]}
-        for item in retrieval["results"][:4]
+        for item in retrieval_results[:4]
     ]
+    request_id = str(uuid.uuid4())
     result = {
         "diagnosis_id": f"DIA_{datetime.now(timezone.utc):%Y%m%d}_{uuid.uuid4().hex[:8].upper()}",
         "device_id": device_id,
@@ -332,9 +334,9 @@ def diagnose(
         },
         "sources": sources,
         "observability": {
-            "request_id": str(uuid.uuid4()),
+            "request_id": request_id,
             "retrieval_count": int(retrieval["candidate_count"]),
-            "rerank_count": len(retrieval["results"]) if route.need_retrieval else 0,
+            "rerank_count": len(retrieval_results) if route.need_retrieval else 0,
             "retrieval_latency_ms": retrieval_latency_ms,
             "llm_latency_ms": round(llm_latency_ms, 3),
             "total_latency_ms": elapsed,
@@ -350,9 +352,9 @@ def diagnose(
     repository.save_diagnosis(
         {
             **result,
-            "request_id": result["observability"]["request_id"],
+            "request_id": request_id,
             "query": query,
-            "trace_contexts": retrieval["results"][:4],
+            "trace_contexts": retrieval_results[:4],
         }
     )
     return result

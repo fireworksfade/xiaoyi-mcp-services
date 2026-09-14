@@ -15,6 +15,22 @@ python -m iot_diagnosis.server
 
 SQLite 是本地事实源。MySQL/Qdrant 写入失败会进入持久化 outbox，后台按 `DIAGNOSIS_SYNC_RETRY_SECONDS` 重试，健康结果中的 `storage.outbox` 会显示积压。
 
+Diagnosis Repository 的公开入口保持为 `iot_diagnosis.repository.DiagnosisRepository`；
+内部已按 `repositories/device_state.py`、`logs.py`、`knowledge_cases.py`、
+`diagnosis_records.py` 和 `external_sync.py` 拆分。schema 版本由 `common/migrations.py`
+与各服务的 `migrations/` 目录独立管理，Repository 构造期间不再执行全库外部同步。
+
+## 开发验证
+
+```powershell
+python -m venv .venv
+.venv\Scripts\python -m pip install -e ".[dev]"
+.venv\Scripts\python -m ruff check common iot_diagnosis iot_control model_service scripts tests
+.venv\Scripts\python -m ruff format --check common iot_diagnosis iot_control model_service scripts tests
+.venv\Scripts\python -m mypy common iot_diagnosis iot_control model_service
+.venv\Scripts\python -m pytest -q tests
+```
+
 设置 `DIAGNOSIS_LLM_API_KEY` 与 `DIAGNOSIS_LLM_MODEL` 后，复杂问题会调用兼容 Chat Completions 的真实 LLM Router 和 Diagnosis，并记录耗时与 Token 数量；未配置或调用失败时使用启发式回退，结果中的 `route.router` 和 `observability.llm_fallback_reason` 会明确标识。
 
 RSSI、温度、在线状态、WiFi/MQTT 连接状态等实时问题由 Rule Router 直接回答，响应包含 `answer` 和 `realtime_state`，不会调用 LLM。启发式诊断覆盖 WiFi 弱信号/断开、MQTT Broker 不可达/认证失败/Keep Alive 超时、传感器读取失败/数据异常、设备重启/内存不足和网络延迟/丢包。`get_diagnosis_trace` 会返回完整诊断结果快照及最终上下文。

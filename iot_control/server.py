@@ -81,7 +81,7 @@ mcp = MCPServer(
     auth=auth_settings,
     token_verifier=token_verifier,
 )
-read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
+read_only = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 DeviceId = Annotated[str, Field(min_length=1, max_length=120)]
 ShortText = Annotated[str, Field(min_length=1, max_length=300)]
 LongText = Annotated[str, Field(min_length=1, max_length=4000)]
@@ -102,10 +102,10 @@ def list_device_actions(
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
     )
 )
 def execute_device_action(
@@ -149,10 +149,10 @@ def execute_device_action(
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
     )
 )
 def create_remediation_proposal(
@@ -202,6 +202,7 @@ def get_action_result(
         if command is None:
             return failure("COMMAND_NOT_FOUND", f"Command {command_id} does not exist")
         return success({"command": command})
+    assert proposal_id is not None
     proposal = repository.get_proposal(proposal_id)
     if proposal is None:
         return failure("PROPOSAL_NOT_FOUND", f"Proposal {proposal_id} does not exist")
@@ -221,10 +222,10 @@ def list_remediation_proposals(
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
     )
 )
 def decide_remediation_proposal(

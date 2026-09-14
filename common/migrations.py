@@ -18,7 +18,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence, cast
 
 logger = logging.getLogger("xiaoyi.migrations")
 
@@ -70,11 +70,12 @@ class Migration:
 
     @classmethod
     def of(cls, module: object) -> "Migration":
-        source = inspect.getsource(module)
+        typed_module = cast(Any, module)
+        source = inspect.getsource(typed_module)
         return cls(
-            version=int(module.version),  # type: ignore[attr-defined]
-            name=str(module.name),  # type: ignore[attr-defined]
-            upgrade=module.upgrade,  # type: ignore[attr-defined]
+            version=int(typed_module.version),
+            name=str(typed_module.name),
+            upgrade=typed_module.upgrade,
             checksum=hashlib.sha256(source.encode("utf-8")).hexdigest(),
         )
 
@@ -212,11 +213,12 @@ class MySqlMigration:
 
     @classmethod
     def of(cls, module: object) -> "MySqlMigration":
-        source = inspect.getsource(module)
+        typed_module = cast(Any, module)
+        source = inspect.getsource(typed_module)
         return cls(
-            version=int(module.version),  # type: ignore[attr-defined]
-            name=str(module.name),  # type: ignore[attr-defined]
-            upgrade=module.upgrade,  # type: ignore[attr-defined]
+            version=int(typed_module.version),
+            name=str(typed_module.name),
+            upgrade=typed_module.upgrade,
             checksum=hashlib.sha256(source.encode("utf-8")).hexdigest(),
         )
 
@@ -240,12 +242,13 @@ class MySQLMigrationRunner:
         self.service = service
 
     def ensure(self, connect: Callable[[], object]) -> None:
-        with connect() as connection:
+        with cast(Any, connect()) as connection:
             cursor = connection.cursor()
             cursor.execute(MIGRATIONS_TABLE_DDL)
             connection.commit()
 
-            rows = cursor.execute("SELECT version, checksum FROM schema_migrations").fetchall()
+            cursor.execute("SELECT version, checksum FROM schema_migrations")
+            rows = cursor.fetchall()
             applied = {int(row[0]): row[1] for row in rows}
             for migration in self.migrations:
                 expected = applied.get(migration.version)

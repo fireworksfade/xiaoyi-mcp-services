@@ -8,9 +8,6 @@ on:
 jobs:
   tests:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mcp-services
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,5 +20,7 @@ jobs:
         run: ruff check common iot_diagnosis iot_control model_service scripts tests
       - name: Ruff format check
         run: ruff format --check common iot_diagnosis iot_control model_service scripts tests
+      - name: Type check
+        run: mypy common iot_diagnosis iot_control model_service
       - name: Unit and protocol tests
         run: pytest tests -q

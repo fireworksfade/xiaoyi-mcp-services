@@ -46,8 +46,6 @@ def test_rebuild_pages_through_logs(tmp_path) -> None:
     service = RebuildService(repository, batch_size=10)
     dispatched: list[str] = []
 
-    original = repository._external_write
-
     def fake_write(component, operation, payload):  # noqa: ANN001
         dispatched.append(payload["message"])
         return True
@@ -80,7 +78,6 @@ def test_rebuild_resume_from_cursor_is_idempotent(tmp_path) -> None:
     repository = _make_repository_with_rows(tmp_path, rows=12)
     service = RebuildService(repository, batch_size=5)
     dispatched: list[str] = []
-    original = repository._external_write
 
     def fake_write(component, operation, payload):  # noqa: ANN001
         dispatched.append(payload["message"])

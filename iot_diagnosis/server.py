@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -21,6 +22,8 @@ from iot_diagnosis.repository import DiagnosisRepository
 from iot_diagnosis.retention import RetentionService
 from iot_diagnosis.retrieval import search_fault_cases as retrieve_fault_cases
 from iot_diagnosis.retrieval import search_knowledge as retrieve_knowledge
+
+logger = logging.getLogger("xiaoyi.iot_diagnosis.server")
 
 repository = DiagnosisRepository(
     os.getenv("DIAGNOSIS_DATABASE_PATH", "data/iot_diagnosis.db"),
@@ -97,7 +100,7 @@ mcp = MCPServer(
     auth=auth_settings,
     token_verifier=token_verifier,
 )
-read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
+read_only = ToolAnnotations(read_only_hint=True, destructive_hint=False, open_world_hint=False)
 DeviceId = Annotated[str, Field(min_length=1, max_length=120)]
 ShortText = Annotated[str, Field(min_length=1, max_length=300)]
 LongText = Annotated[str, Field(min_length=1, max_length=4000)]
@@ -248,10 +251,10 @@ def list_diagnoses(
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=False,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=False,
+        open_world_hint=False,
     )
 )
 def add_verified_fault_case(
@@ -289,10 +292,10 @@ def add_verified_fault_case(
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     )
 )
 def ingest_knowledge_text(
@@ -326,10 +329,10 @@ def ingest_knowledge_text(
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
     )
 )
 def delete_knowledge_document(
@@ -347,10 +350,10 @@ def delete_knowledge_document(
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=True,
-        idempotentHint=True,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=True,
+        idempotent_hint=True,
+        open_world_hint=False,
     )
 )
 def delete_fault_case(
@@ -367,10 +370,10 @@ def delete_fault_case(
 
 @mcp.tool(
     annotations=ToolAnnotations(
-        readOnlyHint=False,
-        destructiveHint=False,
-        idempotentHint=True,
-        openWorldHint=False,
+        read_only_hint=False,
+        destructive_hint=False,
+        idempotent_hint=True,
+        open_world_hint=False,
     )
 )
 def rebuild_vector_index(

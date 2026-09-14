@@ -9,6 +9,8 @@
   runtime_state_notes）。
 """
 
+import sqlite3
+
 version = 2
 name = "state_lifecycle"
 

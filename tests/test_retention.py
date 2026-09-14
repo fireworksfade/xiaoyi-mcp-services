@@ -44,7 +44,7 @@ def _insert(repo: DiagnosisRepository) -> None:
                 VALUES ('ESP32_05', ?, NULL, NULL, NULL, NULL, ?, ?, ?)""",
                 (20.0 + i, f"2026-09-{10 + i:02d}T00:00:00+00:00", received_old, f"old-{i}"),
             )
-        for i in range(4):
+        for _i in range(4):
             db.execute(
                 "INSERT INTO device_log(device_id, level, module, message, timestamp)"
                 " VALUES ('ESP32_05', 'INFO', 'test', 'old info', ?)",
